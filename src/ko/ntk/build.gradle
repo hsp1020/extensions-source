@@ -1,0 +1,8 @@
+ext {
+    extName = 'NTK'
+    extClass = '.NTKFactory'
+    extVersionCode = 1
+    isNsfw = true
+}
+
+apply from: "$rootDir/common.gradle"

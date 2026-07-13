@@ -4,9 +4,17 @@ import android.annotation.SuppressLint
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.SslErrorHandler
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.net.http.SslError
 import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
@@ -34,10 +42,6 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.runBlocking
 
 abstract class NTKBase(
     override val name: String,
@@ -75,7 +79,7 @@ abstract class NTKBase(
         headers = headers.newBuilder().add("X-WebView-Intercept", "true").build(),
     )
 
-@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
+    @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
     private val trojanWebViewInterceptor = Interceptor { chain ->
         val request = chain.request()
 
@@ -83,15 +87,189 @@ abstract class NTKBase(
             return@Interceptor chain.proceed(request)
         }
 
-        // 백그라운드 웹뷰로 30초 대기 타임아웃을 유발하는 무거운 동작들을 전부 스킵하고,
-        // 이미 앱 내부에 확보된 광고 검증 우회 쿠키를 실어 다이렉트로 정적 HTML 문서를 서버에 요청합니다.
-        val newRequest = request.newBuilder()
-            .removeHeader("X-WebView-Intercept")
-            .build()
+        val chapterUrl = request.url.toString()
+        
+        // 미온 앱 에러 다이얼로그 및 화면에 실시간으로 로그를 노출하기 위한 리스트
+        val debugLogs = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.KOREA)
+        
+        fun log(msg: String) {
+            val time = timeFormat.format(java.util.Date())
+            val formatted = "[$time] $msg"
+            Log.d("NTK_DEBUG", formatted)
+            debugLogs.add(formatted)
+        }
 
-        return@Interceptor chain.proceed(newRequest)
+        log("=== [시작] Trojan WebView Interceptor ===")
+        log("Chapter URL: $chapterUrl")
+        log("Root URL: $rootUrl")
+
+        var finalHtml: String? = null
+        val latch = CountDownLatch(1)
+        val handler = Handler(Looper.getMainLooper())
+
+        handler.post {
+            try {
+                val context = Injekt.get<Application>()
+                val webView = WebView(context)
+                log("WebView 인스턴스 생성 완료")
+
+                webView.settings.javaScriptEnabled = true
+                webView.settings.domStorageEnabled = true
+
+                webView.measure(
+                    android.view.View.MeasureSpec.makeMeasureSpec(1080, android.view.View.MeasureSpec.EXACTLY),
+                    android.view.View.MeasureSpec.makeMeasureSpec(1920, android.view.View.MeasureSpec.EXACTLY),
+                )
+                webView.layout(0, 0, 1080, 1920)
+
+                val userAgent = request.header("User-Agent")
+                    ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                webView.settings.userAgentString = userAgent
+                log("적용된 User-Agent: $userAgent")
+
+                val cookieManager = android.webkit.CookieManager.getInstance()
+                cookieManager.setAcceptCookie(true)
+                cookieManager.setAcceptThirdPartyCookies(webView, true)
+
+                val currentCookies = cookieManager.getCookie(rootUrl)
+                log("현재 수집된 쿠키 ($rootUrl): $currentCookies")
+
+                webView.addJavascriptInterface(
+                    object {
+                        @JavascriptInterface
+                        @Suppress("unused")
+                        fun exfiltrate(html: String) {
+                            val snippet = if (html.length > 150) html.substring(0, 150) else html
+                            log("=== [수신 성공] JavaScript에서 exfiltrate 수신완료! ===")
+                            log("수신 데이터 길이: ${html.length}")
+                            log("수신 데이터 앞부분: $snippet")
+                            finalHtml = html
+                            latch.countDown()
+                        }
+                    },
+                    "TrojanTunnel",
+                )
+
+                val wiretapScript = """
+                    (function() {
+                        window.__ntkDevtoolsPreflight = 1;
+                        const originalFetch = window.fetch;
+                        window.fetch = async function() {
+                            let reqUrl = arguments[0] && arguments[0].url ? arguments[0].url : arguments[0];
+                            console.log("NTK_JS: fetch 요청 감지됨 -> " + reqUrl);
+                            const response = await originalFetch.apply(this, arguments);
+                            if (reqUrl && reqUrl.toString().match(/\/api\/(manhwa|webtoon)-images/)) {
+                                console.log("NTK_JS: API 주소 일치 확인! 본문 데이터 추출 개시...");
+                                response.clone().text().then(text => {
+                                    window.TrojanTunnel.exfiltrate(text);
+                                }).catch(err => {
+                                    console.error("NTK_JS_ERR: 복사 실패: " + err);
+                                });
+                            }
+                            return response;
+                        };
+                        console.log("NTK_JS: window.fetch 후킹 스크립트 주입 완료");
+                    })();
+                """.trimIndent()
+
+                var preloadDone = false
+
+                webView.webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                        log("onPageStarted: $url (preloadDone: $preloadDone)")
+                        if (preloadDone) {
+                            log("페이지 주입 개시: $url")
+                            view.evaluateJavascript(wiretapScript) { result ->
+                                log("스크립트 주입 반환값: $result")
+                            }
+                        }
+                        super.onPageStarted(view, url, favicon)
+                    }
+
+                    override fun onPageFinished(view: WebView, url: String) {
+                        log("onPageFinished: $url")
+                        if (!preloadDone) {
+                            preloadDone = true
+                            log("홈 화면 로드 완료. 만화 본문 chapterUrl 로딩 시작: $chapterUrl")
+                            view.loadUrl(chapterUrl)
+                        } else {
+                            log("만화 본문 chapterUrl 로드 완료 상태 도달")
+                        }
+                        super.onPageFinished(view, url)
+                    }
+
+                    override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                        log("onReceivedError: ${request.url} - 에러코드: ${error.errorCode}, 설명: ${error.description}")
+                        super.onReceivedError(view, request, error)
+                    }
+
+                    @Suppress("deprecation")
+                    override fun onReceivedError(view: WebView, errorCode: Int, description: String, failingUrl: String) {
+                        log("onReceivedError (구버전): $failingUrl - 코드: $errorCode, 설명: $description")
+                        super.onReceivedError(view, errorCode, description, failingUrl)
+                    }
+
+                    override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+                        log("onReceivedHttpError: ${request.url} - HTTP 상태 코드: ${errorResponse.statusCode}")
+                        super.onReceivedHttpError(view, request, errorResponse)
+                    }
+
+                    override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                        log("onReceivedSslError: ${error.url} - SSL 에러 상태: $error")
+                        handler.proceed()
+                    }
+                }
+
+                webView.webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                        val msg = "CONSOLE [${consoleMessage.messageLevel()}]: ${consoleMessage.message()} (위치: ${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})"
+                        log(msg)
+                        return true
+                    }
+
+                    override fun onProgressChanged(view: WebView, newProgress: Int) {
+                        log("로딩 진행도: $newProgress% (현재 웹뷰 주소: ${view.url})")
+                    }
+                }
+
+                log("최초 홈 주소 로딩 개시: $rootUrl")
+                webView.loadUrl(rootUrl)
+
+            } catch (e: Exception) {
+                log("Handler 스레드 내부에서 심각한 예외 발생: ${e.message}")
+                latch.countDown()
+            }
+        }
+
+        log("exfiltrate 데이터 대기 시작 (최대 30초)...")
+        val reachedZero = latch.await(30, TimeUnit.SECONDS)
+        log("대기 정지 풀림. reachedZero: $reachedZero")
+
+        if (!reachedZero) {
+            log("=== [실패] 웹뷰 로딩 타임아웃 30초를 모두 초과했습니다. ===")
+        }
+
+        finalHtml?.let {
+            val isJson = it.trim().startsWith("{")
+            val mediaType = if (isJson) "application/json" else "text/html"
+            log("데이터 수신 성공. 뷰어로 반환 진행.")
+            return@Interceptor Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body(it.toResponseBody(mediaType.toMediaType()))
+                .build()
+        }
+
+        // 미온 앱 화면에 통째로 보여주기 위해 로그 조립
+        val logDump = debugLogs.joinToString("\n")
+        log("finalHtml이 null이므로 오류 화면에 수집된 디버그 로그를 덤프합니다.")
+
+        throw Exception("WebView timed out loading ${request.url}\n\n=== 디버그 로그 수집 결과 ===\n$logDump")
     }
-    
+
     private val headerCleanerInterceptor = Interceptor { chain ->
         val originalRequest = chain.request()
         val requestBuilder = originalRequest.newBuilder()
@@ -290,53 +468,30 @@ abstract class NTKBase(
         val document = response.asJsoup()
         val chapters = mutableListOf<SChapter>()
 
-        // 1. 우선 첫 번째 페이지(현재 수신한 HTML)의 회차들을 파싱하여 리스트에 담습니다.
         chapters.addAll(parseChaptersFromDocument(document))
 
-        // 2. 하단 페이징 영역에서 epage=가 들어간 링크들을 모두 찾아 그중 가장 높은 페이지 번호(maxPage)를 추출합니다.
         val maxPage = document.select(".episode-pager a[href*=epage=]")
             .mapNotNull { it.attr("href").substringAfter("epage=").toIntOrNull() }
             .maxOrNull() ?: 1
 
-        // 3. 만약 2페이지 이상 존재한다면, 코루틴을 사용해 안전하게 병렬 처리합니다.
-        if (maxPage > 1) {
-            val pagesToFetch = (2..maxPage).toList()
-
-            // runBlocking으로 IO 스레드 풀에서 병렬 작업을 조율합니다.
-            val fetchedChapters = runBlocking(Dispatchers.IO) {
-                // 한 번에 3개씩 병렬 묶음(Chunk)을 지어 요청을 보냄으로써 차단 탐지를 안전하게 회피합니다.
-                pagesToFetch.chunked(3).flatMap { chunk ->
-                    chunk.map { page ->
-                        async {
-                            val pageUrl = response.request.url.newBuilder()
-                                .setQueryParameter("epage", page.toString())
-                                .build()
-                            val pageRequest = GET(pageUrl, headers)
-
-                            try {
-                                // .use { ... } 블록을 사용해 커넥션 풀 누수를 방지하고 안전하게 응답을 닫습니다.
-                                client.newCall(pageRequest).execute().use { pageResponse ->
-                                    if (pageResponse.isSuccessful) {
-                                        val pageDocument = pageResponse.asJsoup()
-                                        parseChaptersFromDocument(pageDocument)
-                                    } else {
-                                        emptyList()
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                emptyList() // 개별 페이지 로드 실패 시 무중단 처리를 위해 빈 리스트 반환
-                            }
-                        }
-                    }.awaitAll().flatten()
-                }
+        for (page in 2..maxPage) {
+            val pageUrl = response.request.url.newBuilder()
+                .setQueryParameter("epage", page.toString())
+                .build()
+            
+            val pageRequest = GET(pageUrl, headers)
+            val pageResponse = client.newCall(pageRequest).execute()
+            
+            if (pageResponse.isSuccessful) {
+                val pageDocument = pageResponse.asJsoup()
+                chapters.addAll(parseChaptersFromDocument(pageDocument))
             }
-            chapters.addAll(fetchedChapters)
+            pageResponse.close()
         }
 
         return chapters
     }
 
-    // 반복적인 회차 HTML 엘리먼트 파싱을 담당하는 전용 헬퍼 함수를 추가합니다.
     private fun parseChaptersFromDocument(document: org.jsoup.nodes.Document): List<SChapter> {
         return document.select("ul.ep-list-v2 > li.ep-row-v2").map { element ->
             SChapter.create().apply {
@@ -349,31 +504,11 @@ abstract class NTKBase(
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        val body = response.body.string()
-
-        // 1. 만약 수신된 데이터가 JSON 형식일 경우의 예외 대응 (하위 호환)
-        if (body.trim().startsWith("{")) {
-            val data = json.decodeFromString<PageImagesResponse>(body)
-            return data.images.mapIndexed { i, image ->
-                Page(i, imageUrl = image.src)
-            }
-        }
-
-        // 2. 수신된 순정 HTML 문서에서 Jsoup을 사용해 원본 이미지 태그 주소를 즉시 추출합니다.
-        val document = org.jsoup.Jsoup.parse(body)
-        val imgElements = document.select("div.vw-imgs img.viewer-lazy-img")
-
-        // 수동 광고 검증 세션이 유실되어 이미지를 긁어오지 못했을 때만 명확한 에러 가이드를 던집니다.
-        if (imgElements.isEmpty()) {
-            throw Exception("만화 이미지를 찾을 수 없습니다. 미온 앱 내 '지구본(웹뷰로 열기)'으로 접속하셔서 광고 검증을 완료하고 세션을 갱신해 주세요.")
-        }
-
-        return imgElements.mapIndexed { i, element ->
-            val url = element.attr("data-src").ifEmpty { element.attr("src") }
-            Page(i, imageUrl = url)
+        val data = response.parseAs<PageImagesResponse>()
+        return data.images.mapIndexed { i, image ->
+            Page(i, imageUrl = image.src)
         }
     }
-    
 
     override fun imageUrlParse(response: Response) = throw UnsupportedOperationException()
 

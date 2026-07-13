@@ -1,12 +1,8 @@
-import io.github.keiyoushi.gradle.api.ContentWarning
-
-plugins {
-    alias(kei.plugins.extension)
+ext {
+    extName = 'NTK'
+    extClass = '.NTKFactory'
+    extVersionCode = 2   // 👈 혹시 코드를 고치셨다면 이 숫자를 더 높여줍니다 (예: 2)
+    isNsfw = true
 }
 
-keiyoushi {
-    name = "NTK"
-    className = ".NTKFactory"            // 👈 기존 extClass 값 입력
-    versionCode = 1                      // 👈 기존 extVersionCode 값 입력 (수정 시 숫자 올리기)
-    contentWarning = ContentWarning.NSFW // 👈 기존 isNsfw = true에 해당
-}
+apply plugin: "kei.plugins.extension.legacy" // 👈 이렇게 호환성 플러그인으로 교체합니다.

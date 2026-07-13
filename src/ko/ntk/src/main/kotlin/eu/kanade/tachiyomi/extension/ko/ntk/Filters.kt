@@ -7,7 +7,7 @@ data class FilterOption(val name: String, val value: String)
 internal val sortList = listOf(
     FilterOption("최신순", "new"),
     FilterOption("신작순", "fresh"),
-    FilterOption("북마크순", "bookmark"),
+    FilterOption("북마크순", "hot"),
     FilterOption("조회순", "views"),
 )
 

@@ -34,6 +34,10 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 
 abstract class NTKBase(
     override val name: String,
@@ -363,35 +367,51 @@ abstract class NTKBase(
 
     private val dateFormat = SimpleDateFormat("yy.MM.dd", Locale.KOREA)
 
-    // 기존의 chapterListParse를 아래 코드로 통째로 대체합니다.
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
         val chapters = mutableListOf<SChapter>()
 
-        // 1. 우선 첫 번째 페이지(현재 수신한 페이지)의 회차들을 파싱하여 리스트에 담습니다.
+        // 1. 우선 첫 번째 페이지(현재 수신한 HTML)의 회차들을 파싱하여 리스트에 담습니다.
         chapters.addAll(parseChaptersFromDocument(document))
 
         // 2. 하단 페이징 영역에서 epage=가 들어간 링크들을 모두 찾아 그중 가장 높은 페이지 번호(maxPage)를 추출합니다.
-        // 페이징 버튼이 없거나 찾을 수 없다면 기본값인 1페이지로 설정합니다.
         val maxPage = document.select(".episode-pager a[href*=epage=]")
             .mapNotNull { it.attr("href").substringAfter("epage=").toIntOrNull() }
             .maxOrNull() ?: 1
 
-        // 3. 만약 2페이지 이상 존재한다면, 2페이지부터 끝까지 순차적으로 요청하여 회차를 추가로 파싱합니다.
-        for (page in 2..maxPage) {
-            // 기존 URL 구조를 해치지 않고 안전하게 쿼리 파라미터(?epage=숫자)만 덧붙여 요청 URL을 빌드합니다.
-            val pageUrl = response.request.url.newBuilder()
-                .setQueryParameter("epage", page.toString())
-                .build()
-            
-            val pageRequest = GET(pageUrl, headers)
-            val pageResponse = client.newCall(pageRequest).execute()
-            
-            if (pageResponse.isSuccessful) {
-                val pageDocument = pageResponse.asJsoup()
-                chapters.addAll(parseChaptersFromDocument(pageDocument))
+        // 3. 만약 2페이지 이상 존재한다면, 코루틴을 사용해 안전하게 병렬 처리합니다.
+        if (maxPage > 1) {
+            val pagesToFetch = (2..maxPage).toList()
+
+            // runBlocking으로 IO 스레드 풀에서 병렬 작업을 조율합니다.
+            val fetchedChapters = runBlocking(Dispatchers.IO) {
+                // 한 번에 3개씩 병렬 묶음(Chunk)을 지어 요청을 보냄으로써 차단 탐지를 안전하게 회피합니다.
+                pagesToFetch.chunked(3).flatMap { chunk ->
+                    chunk.map { page ->
+                        async {
+                            val pageUrl = response.request.url.newBuilder()
+                                .setQueryParameter("epage", page.toString())
+                                .build()
+                            val pageRequest = GET(pageUrl, headers)
+
+                            try {
+                                // .use { ... } 블록을 사용해 커넥션 풀 누수를 방지하고 안전하게 응답을 닫습니다.
+                                client.newCall(pageRequest).execute().use { pageResponse ->
+                                    if (pageResponse.isSuccessful) {
+                                        val pageDocument = pageResponse.asJsoup()
+                                        parseChaptersFromDocument(pageDocument)
+                                    } else {
+                                        emptyList()
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                emptyList() // 개별 페이지 로드 실패 시 무중단 처리를 위해 빈 리스트 반환
+                            }
+                        }
+                    }.awaitAll().flatten()
+                }
             }
-            pageResponse.close()
+            chapters.addAll(fetchedChapters)
         }
 
         return chapters

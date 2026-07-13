@@ -75,7 +75,7 @@ abstract class NTKBase(
         headers = headers.newBuilder().add("X-WebView-Intercept", "true").build(),
     )
 
-    @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
+@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
     private val trojanWebViewInterceptor = Interceptor { chain ->
         val request = chain.request()
 
@@ -83,96 +83,15 @@ abstract class NTKBase(
             return@Interceptor chain.proceed(request)
         }
 
-        var finalHtml: String? = null
-        val latch = CountDownLatch(1)
-        val handler = Handler(Looper.getMainLooper())
+        // 백그라운드 웹뷰로 30초 대기 타임아웃을 유발하는 무거운 동작들을 전부 스킵하고,
+        // 이미 앱 내부에 확보된 광고 검증 우회 쿠키를 실어 다이렉트로 정적 HTML 문서를 서버에 요청합니다.
+        val newRequest = request.newBuilder()
+            .removeHeader("X-WebView-Intercept")
+            .build()
 
-        handler.post {
-            val context = Injekt.get<Application>()
-            val webView = WebView(context)
-
-            webView.settings.javaScriptEnabled = true
-            webView.settings.domStorageEnabled = true
-
-            webView.measure(
-                android.view.View.MeasureSpec.makeMeasureSpec(1080, android.view.View.MeasureSpec.EXACTLY),
-                android.view.View.MeasureSpec.makeMeasureSpec(1920, android.view.View.MeasureSpec.EXACTLY),
-            )
-            webView.layout(0, 0, 1080, 1920)
-
-            webView.settings.userAgentString = request.header("User-Agent")
-                ?: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.110 Mobile Safari/537.36 X11; Linux x86_64"
-
-            android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
-
-            webView.addJavascriptInterface(
-                object {
-                    @JavascriptInterface
-                    @Suppress("unused")
-                    fun exfiltrate(html: String) {
-                        finalHtml = html
-                        latch.countDown()
-                    }
-                },
-                "TrojanTunnel",
-            )
-
-            val wiretapScript = """
-                window.__ntkDevtoolsPreflight = 1;
-                const originalFetch = window.fetch;
-                window.fetch = async function() {
-                    const response = await originalFetch.apply(this, arguments);
-                    let reqUrl = arguments[0] && arguments[0].url ? arguments[0].url : arguments[0];
-                    if (reqUrl && reqUrl.toString().match(/\/api\/(manhwa|webtoon)-images/)) {
-                        response.clone().text().then(text => {
-                            window.TrojanTunnel.exfiltrate(text);
-                        });
-                    }
-                    return response;
-                };
-            """.trimIndent()
-
-            val chapterUrl = request.url.toString()
-            var preloadDone = false
-
-            webView.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, url: String) {
-                    if (!preloadDone) {
-                        preloadDone = true
-                        view.loadUrl(chapterUrl)
-                    }
-                    super.onPageFinished(view, url)
-                }
-
-                override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                    if (preloadDone) {
-                        view.evaluateJavascript(wiretapScript, null)
-                    }
-                    super.onPageStarted(view, url, favicon)
-                }
-            }
-
-            webView.loadUrl(rootUrl)
-        }
-
-        latch.await(30, TimeUnit.SECONDS)
-
-        finalHtml?.let {
-            val isJson = it.trim().startsWith("{")
-            val mediaType = if (isJson) "application/json" else "text/html"
-            return@Interceptor Response.Builder()
-                .request(request)
-                .protocol(Protocol.HTTP_1_1)
-                .code(200)
-                .message("OK")
-                .body(it.toResponseBody(mediaType.toMediaType()))
-                .build()
-        }
-
-        throw Exception("WebView timed out loading ${request.url}")
+        return@Interceptor chain.proceed(newRequest)
     }
-
+    
     private val headerCleanerInterceptor = Interceptor { chain ->
         val originalRequest = chain.request()
         val requestBuilder = originalRequest.newBuilder()
@@ -430,11 +349,31 @@ abstract class NTKBase(
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        val data = response.parseAs<PageImagesResponse>()
-        return data.images.mapIndexed { i, image ->
-            Page(i, imageUrl = image.src)
+        val body = response.body.string()
+
+        // 1. 만약 수신된 데이터가 JSON 형식일 경우의 예외 대응 (하위 호환)
+        if (body.trim().startsWith("{")) {
+            val data = json.decodeFromString<PageImagesResponse>(body)
+            return data.images.mapIndexed { i, image ->
+                Page(i, imageUrl = image.src)
+            }
+        }
+
+        // 2. 수신된 순정 HTML 문서에서 Jsoup을 사용해 원본 이미지 태그 주소를 즉시 추출합니다.
+        val document = org.jsoup.Jsoup.parse(body)
+        val imgElements = document.select("div.vw-imgs img.viewer-lazy-img")
+
+        // 수동 광고 검증 세션이 유실되어 이미지를 긁어오지 못했을 때만 명확한 에러 가이드를 던집니다.
+        if (imgElements.isEmpty()) {
+            throw Exception("만화 이미지를 찾을 수 없습니다. 미온 앱 내 '지구본(웹뷰로 열기)'으로 접속하셔서 광고 검증을 완료하고 세션을 갱신해 주세요.")
+        }
+
+        return imgElements.mapIndexed { i, element ->
+            val url = element.attr("data-src").ifEmpty { element.attr("src") }
+            Page(i, imageUrl = url)
         }
     }
+    
 
     override fun imageUrlParse(response: Response) = throw UnsupportedOperationException()
 

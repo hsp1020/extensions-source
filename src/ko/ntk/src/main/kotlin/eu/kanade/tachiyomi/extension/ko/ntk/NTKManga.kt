@@ -3,30 +3,24 @@ package eu.kanade.tachiyomi.extension.ko.ntk
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
-import eu.kanade.tachiyomi.source.model.MangasPage
 import keiyoushi.utils.firstInstanceOrNull
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
-import okhttp3.Response
 
 class NTKManga : NTKBase("NTK Manga", "manhwa") {
 
-    override fun popularMangaParse(response: Response): MangasPage = htmlCardParse(response)
-    override fun latestUpdatesParse(response: Response): MangasPage = htmlCardParse(response)
-
     override fun popularMangaRequest(page: Int): Request {
-        val url = "$rootUrl/manhwa".toHttpUrl().newBuilder().apply {
+        val url = "$rootUrl/api/manhwa-list".toHttpUrl().newBuilder().apply {
+            addQueryParameter("status", "ongoing")
+            addQueryParameter("sort", "views")
             addQueryParameter("page", page.toString())
+            addQueryParameter("pageSize", PAGE_SIZE.toString())
+            addQueryParameter("withTotal", "1")
         }.build()
-        return GET(url, headers)
+        return GET(url, apiHeaders)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request {
-        val url = "$rootUrl/manhwa/updates".toHttpUrl().newBuilder().apply {
-            addQueryParameter("page", page.toString())
-        }.build()
-        return GET(url, headers)
-    }
+    override fun latestUpdatesRequest(page: Int): Request = GET("$rootUrl/manhwa/updates", headers)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotEmpty()) {
@@ -45,15 +39,18 @@ class NTKManga : NTKBase("NTK Manga", "manhwa") {
         val statusParam = statusFilter?.let { statusList[it.state].value } ?: statusList[0].value
         val genreParam = buildGenreParam(genreFilter)
 
-        // 기존 Filters.kt의 "-end" 값을 그대로 활용해 분기합니다.
-        val path = if (statusParam == "-end") "manhwa-end" else "manhwa"
+        // 👈 [해결 핵심] 기존 "-end" 상태일 때, 서버에 보낼 API 상태 파라미터 값을 "completed"로 지정합니다.
+        val apiStatus = if (statusParam == "-end") "completed" else "ongoing"
 
-        val url = "$rootUrl/$path".toHttpUrl().newBuilder().apply {
-            addQueryParameter("page", page.toString())
+        val url = "$rootUrl/api/manhwa-list".toHttpUrl().newBuilder().apply {
+            addQueryParameter("status", apiStatus)
             if (sortParam != "new") addQueryParameter("sort", sortParam)
             genreParam?.let { addQueryParameter("g", it) }
+            addQueryParameter("page", page.toString())
+            addQueryParameter("pageSize", PAGE_SIZE.toString())
+            addQueryParameter("withTotal", "1")
         }.build()
-        return GET(url, headers)
+        return GET(url, apiHeaders)
     }
 
     override fun getFilterList() = FilterList(

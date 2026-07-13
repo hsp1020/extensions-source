@@ -34,7 +34,6 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import androidx.annotation.Keep // 👈 이 임포트를 추가합니다.
 
 abstract class NTKBase(
     override val name: String,
@@ -106,7 +105,6 @@ abstract class NTKBase(
             webView.addJavascriptInterface(
                 object {
                     @JavascriptInterface
-                    @Keep // 👈 이 어노테이션을 반드시 추가하여 R8 압축을 방지합니다.
                     @Suppress("unused")
                     fun exfiltrate(html: String) {
                         finalHtml = html
@@ -115,7 +113,7 @@ abstract class NTKBase(
                 },
                 "TrojanTunnel",
             )
-            
+
             val wiretapScript = """
                 window.__ntkDevtoolsPreflight = 1;
                 const originalFetch = window.fetch;
@@ -432,7 +430,7 @@ abstract class NTKBase(
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
         private const val PREF_DOMAIN_KEY = "pref_domain_key"
-        private const val PREF_DOMAIN_DEFAULT = "3"
+        private const val PREF_DOMAIN_DEFAULT = "9"
         const val PAGE_SIZE = 49
     }
 }

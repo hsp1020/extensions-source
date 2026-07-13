@@ -53,7 +53,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           ./gradlew :src:ko:ntk:spotlessApply
-          ./gradlew :src:ko:ntk:assembleRelease
+          ./gradlew :src:ko:ntk:assembleDebug
 
       - name: Upload APKs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

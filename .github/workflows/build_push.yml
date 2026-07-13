@@ -104,7 +104,7 @@ jobs:
 
       - name: Merge and deploy repo
         env:
-          DELETE: ""
+          DELETE: "[]"
         run: |
           cd repo
           pip install protobuf

@@ -1,8 +1,12 @@
-ext {
-    extName = 'NTK'
-    extClass = '.NTKFactory'
-    extVersionCode = 1
-    isNsfw = true
+import io.github.keiyoushi.gradle.api.ContentWarning
+
+plugins {
+    alias(kei.plugins.extension)
 }
 
-apply from: "$rootDir/common.gradle"
+keiyoushi {
+    name = "NTK"
+    className = ".NTKFactory"            // 👈 기존 extClass 값 입력
+    versionCode = 1                      // 👈 기존 extVersionCode 값 입력 (수정 시 숫자 올리기)
+    contentWarning = ContentWarning.NSFW // 👈 기존 isNsfw = true에 해당
+}

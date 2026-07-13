@@ -101,12 +101,15 @@ jobs:
           ref: repo
           path: repo
           persist-credentials: true
-
+          
       - name: Merge and deploy repo
-        env:
-          DELETE: "[]"
         run: |
           cd repo
-          pip install protobuf
-          python ../main/.github/scripts/merge-repo.py "$DELETE"
+          # 1. .git 내부 기록을 제외한 기존의 모든 400여 개 잔여 파일들을 깨끗하게 삭제합니다.
+          find . -maxdepth 1 ! -name '.' ! -name '..' ! -name '.git' -exec rm -rf {} +
+          
+          # 2. 이번에 빌드된 깨끗한 결과물(오직 NTK만 포함되어 있는 새 repo 폴더)의 내용물을 복사해옵니다.
+          cp -r ../main/repo/* .
+          
+          # 3. 깃허브에 커밋하고 푸시합니다. (기존 400개 삭제 및 NTK 등록이 자동으로 추적되어 반영됩니다.)
           ../main/.github/scripts/commit-repo.sh

@@ -1,7 +1,7 @@
 ext {
     extName = 'NTK'
     extClass = '.NTKFactory'
-    extVersionCode = 3 // 👈 혹시 코드를 고치셨다면 이 숫자를 더 높여줍니다 (예: 2)
+    extVersionCode = 4 // 👈 혹시 코드를 고치셨다면 이 숫자를 더 높여줍니다 (예: 2)
     isNsfw = true
 }
 

@@ -28,6 +28,10 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.tryParse
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Interceptor
@@ -89,7 +93,7 @@ abstract class NTKBase(
 
         val chapterUrl = request.url.toString()
         
-        // 미온 앱 에러 다이얼로그 및 화면에 실시간으로 로그를 노출하기 위한 리스트
+        // 미온 앱 화면 내부에서 정밀 로그를 즉시 감지하여 덤프하기 위한 동기화 바인더
         val debugLogs = java.util.Collections.synchronizedList(mutableListOf<String>())
         val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.KOREA)
         
@@ -263,7 +267,7 @@ abstract class NTKBase(
                 .build()
         }
 
-        // 미온 앱 화면에 통째로 보여주기 위해 로그 조립
+        // 미온 앱 에러 다이얼로그에 콘솔 로그를 즉각 노출시키기 위한 가공
         val logDump = debugLogs.joinToString("\n")
         log("finalHtml이 null이므로 오류 화면에 수집된 디버그 로그를 덤프합니다.")
 
@@ -464,29 +468,51 @@ abstract class NTKBase(
 
     private val dateFormat = SimpleDateFormat("yy.MM.dd", Locale.KOREA)
 
+    // 코루틴 병렬 처리 최적화가 적용된 chapterListParse
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
         val chapters = mutableListOf<SChapter>()
 
+        // 1. 첫 페이지(현재 전송받은 HTML 본문)의 회차들을 먼저 파싱해 리스트에 축적합니다.
         chapters.addAll(parseChaptersFromDocument(document))
 
+        // 2. 페이징 최대 수치 추출
         val maxPage = document.select(".episode-pager a[href*=epage=]")
             .mapNotNull { it.attr("href").substringAfter("epage=").toIntOrNull() }
             .maxOrNull() ?: 1
 
-        for (page in 2..maxPage) {
-            val pageUrl = response.request.url.newBuilder()
-                .setQueryParameter("epage", page.toString())
-                .build()
-            
-            val pageRequest = GET(pageUrl, headers)
-            val pageResponse = client.newCall(pageRequest).execute()
-            
-            if (pageResponse.isSuccessful) {
-                val pageDocument = pageResponse.asJsoup()
-                chapters.addAll(parseChaptersFromDocument(pageDocument))
+        // 3. 만약 2페이지 이상 존재한다면, 코루틴 병렬 작업을 통해 리퀘스트 속도를 향상시킵니다.
+        if (maxPage > 1) {
+            val pagesToFetch = (2..maxPage).toList()
+
+            // runBlocking 블록을 통해 Dispatchers.IO 환경에서 대용량 데이터 로드를 병렬 실행합니다.
+            val fetchedChapters = runBlocking(Dispatchers.IO) {
+                // 한 번에 3개씩 동시 처리하여 서버 방화벽(안티봇) 차단을 우회합니다.
+                pagesToFetch.chunked(3).flatMap { chunk ->
+                    chunk.map { page ->
+                        async {
+                            val pageUrl = response.request.url.newBuilder()
+                                .setQueryParameter("epage", page.toString())
+                                .build()
+                            val pageRequest = GET(pageUrl, headers)
+                            
+                            try {
+                                client.newCall(pageRequest).execute().use { pageResponse ->
+                                    if (pageResponse.isSuccessful) {
+                                        val pageDocument = pageResponse.asJsoup()
+                                        parseChaptersFromDocument(pageDocument)
+                                    } else {
+                                        emptyList()
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                emptyList()
+                            }
+                        }
+                    }.awaitAll().flatten()
+                }
             }
-            pageResponse.close()
+            chapters.addAll(fetchedChapters)
         }
 
         return chapters

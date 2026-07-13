@@ -5,9 +5,9 @@ on:
     branches:
       - main
     paths:
-      - 'src/ko/ntk/**' # NTK 폴더 내부 파일이 수정되었을 때만 자동 빌드가 작동합니다.
+      - 'src/ko/ntk/**'
       - '.github/workflows/build_push.yml'
-  workflow_dispatch: # 개발자가 직접 깃허브 웹에서 수동으로 빌드를 실행할 수 있게 합니다.
+  workflow_dispatch:
 
 permissions: {}
 
@@ -39,21 +39,34 @@ jobs:
         run: |
           echo "${{ secrets.SIGNING_KEY }}" | base64 -di > signingkey.jks
 
-      # 오직 NTK 프로젝트만 찝어서 릴리즈용 APK를 빌드합니다.
+      # 서명 키로부터 SHA-256 해시 지문을 자동으로 추출합니다.
+      - name: Extract signing key fingerprint
+        run: |
+          FINGERPRINT=$(keytool -list -v -keystore signingkey.jks -alias hsp-key -storepass 846845 | grep -i SHA256 | awk '{print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          echo "$FINGERPRINT" > fingerprint.txt
+
+      # 빌드 전 서식을 자동 교정(spotlessApply)한 후 NTK 익스텐션만 빌드합니다.
       - name: Build NTK Only
         env:
           ALIAS: ${{ secrets.ALIAS }}
           KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          ./gradlew spotlessApply
           ./gradlew :src:ko:ntk:assembleRelease
 
       - name: Upload APKs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: "github.repository == 'hsp1020/extensions-source'"
         with:
           name: "individual-apks-1"
           path: "**/*.apk"
+          retention-days: 1
+
+      - name: Upload fingerprint artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fingerprint
+          path: fingerprint.txt
           retention-days: 1
 
       - name: Clean up CI files
@@ -62,7 +75,6 @@ jobs:
   publish:
     name: Publish extension repo
     needs: [build]
-    if: "github.repository == 'hsp1020/extensions-source'"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -70,6 +82,12 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: ~/apk-artifacts
+
+      - name: Download fingerprint artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fingerprint
+          path: ~/fingerprint
 
       - name: Set up JDK
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
@@ -101,15 +119,28 @@ jobs:
           ref: repo
           path: repo
           persist-credentials: true
-          
+
       - name: Merge and deploy repo
         run: |
           cd repo
-          # 1. .git 내부 기록을 제외한 기존의 모든 400여 개 잔여 파일들을 깨끗하게 삭제합니다.
+          # 1. 포크하면서 따라온 기존의 400여 개 잔여 파일들을 완전히 정리합니다.
           find . -maxdepth 1 ! -name '.' ! -name '..' ! -name '.git' -exec rm -rf {} +
           
-          # 2. 이번에 빌드된 깨끗한 결과물(오직 NTK만 포함되어 있는 새 repo 폴더)의 내용물을 복사해옵니다.
+          # 2. 이번에 빌드된 새 데이터(index.json, index.pb, apk 폴더 등)를 덮어씌웁니다.
           cp -r ../main/repo/* .
           
-          # 3. 깃허브에 커밋하고 푸시합니다. (기존 400개 삭제 및 NTK 등록이 자동으로 추적되어 반영됩니다.)
+          # 3. 내 고유 서명 키 지문 정보가 들어간 유효한 repo.json 파일을 동적 생성합니다.
+          FINGERPRINT=$(cat ~/fingerprint/fingerprint.txt)
+          cat <<EOF > repo.json
+          {
+            "index_v2": "https://github.com/hsp1020/extensions/raw/repo/index.pb",
+            "meta": {
+              "name": "hsp1020 Extensions",
+              "website": "https://github.com/hsp1020/extensions",
+              "signingKeyFingerprint": "$FINGERPRINT"
+            }
+          }
+          EOF
+          
+          # 4. 저장소를 최종 커밋하고 푸시합니다.
           ../main/.github/scripts/commit-repo.sh

@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.ko.ntk 
+package eu.kanade.tachiyomi.extension.ko.ntk
 
 import android.annotation.SuppressLint
 import android.app.Application

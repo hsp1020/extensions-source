@@ -52,7 +52,7 @@ jobs:
           KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          ./gradlew spotlessApply
+          ./gradlew :src:ko:ntk:spotlessApply
           ./gradlew :src:ko:ntk:assembleRelease
 
       - name: Upload APKs

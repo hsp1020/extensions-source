@@ -252,7 +252,7 @@ abstract class NTKBase(
         val document = response.asJsoup()
         val mangas = document.select("div.card-grid > a.card").map { element ->
             SManga.create().apply {
-                setUrlWithoutDomain(element.absUrl("href"))
+                setUrlWithoutDomain(element.attr("href")) // 👈 absUrl 대신 attr("href")를 사용하여 원천적으로 이중 도메인 버그를 차단합니다.
                 title = element.select("p.subject").text()
                 thumbnail_url = element.select("div.thumb img:not(.platform-icon)").attr("abs:src")
             }

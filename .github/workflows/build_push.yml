@@ -74,7 +74,7 @@ jobs:
 
       - name: Prepare signing key
         run: |
-          echo ${{ secrets.SIGNING_KEY }} | base64 -d > signingkey.jks
+          echo "${{ secrets.SIGNING_KEY }}" | base64 -di > signingkey.jks
 
       - name: Build extensions (${{ matrix.chunk.number }})
         env:

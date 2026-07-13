@@ -12,23 +12,28 @@ import okhttp3.Response
 class NTKWebtoon : NTKBase("NTK Webtoon", "webtoon") {
     override val webViewPath = "ing"
 
-    override fun popularMangaParse(response: Response): MangasPage = htmlCardParse(response)
-    override fun latestUpdatesParse(response: Response): MangasPage = htmlCardParse(response)
-
     override fun popularMangaRequest(page: Int): Request {
-        val url = "$rootUrl/ing".toHttpUrl().newBuilder().apply {
+        val url = "$rootUrl/api/works".toHttpUrl().newBuilder().apply {
+            addQueryParameter("status", "ongoing")
+            addQueryParameter("sort", "views")
             addQueryParameter("page", page.toString())
+            addQueryParameter("pageSize", PAGE_SIZE.toString())
+            addQueryParameter("withTotal", "1")
         }.build()
-        return GET(url, headers)
+        return GET(url, apiHeaders)
     }
 
     override fun latestUpdatesRequest(page: Int): Request {
-        val url = "$rootUrl/ing".toHttpUrl().newBuilder().apply {
-            addQueryParameter("sort", "new")
+        val url = "$rootUrl/api/works".toHttpUrl().newBuilder().apply {
+            addQueryParameter("status", "ongoing")
             addQueryParameter("page", page.toString())
+            addQueryParameter("pageSize", PAGE_SIZE.toString())
+            addQueryParameter("withTotal", "1")
         }.build()
-        return GET(url, headers)
+        return GET(url, apiHeaders)
     }
+
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotEmpty()) {
@@ -51,21 +56,24 @@ class NTKWebtoon : NTKBase("NTK Webtoon", "webtoon") {
         val dayParam = dayFilter?.let { wtDayList[it.state].value } ?: ""
         val tagParam = buildWtGenreParam(genreFilter)
 
-        // 기존 Filters.kt의 "end" 값을 그대로 활용해 분기합니다.
-        val path = if (statusParam == "end") "end" else "ing"
+        // 👈 [해결 핵심] 기존 "end" 상태일 때, 서버에 보낼 API 상태 파라미터 값을 "completed"로 지정합니다.
+        val apiStatus = if (statusParam == "end") "completed" else "ongoing"
 
-        val url = "$rootUrl/$path".toHttpUrl().newBuilder().apply {
-            addQueryParameter("page", page.toString())
+        val url = "$rootUrl/api/works".toHttpUrl().newBuilder().apply {
+            addQueryParameter("status", apiStatus)
             if (sortParam != "new") addQueryParameter("sort", sortParam)
             
-            // 완결("end") 상태가 아닐 때만 카테고리와 요일 파라미터를 추가합니다.
+            // 기존 Filters.kt의 "end" 값을 그대로 활용해 분기합니다.
             if (statusParam != "end") {
                 if (catParam.isNotEmpty()) addQueryParameter("cat", catParam)
                 if (dayParam.isNotEmpty()) addQueryParameter("day", dayParam)
             }
             if (!tagParam.isNullOrEmpty()) addQueryParameter("tag", tagParam)
+            addQueryParameter("page", page.toString())
+            addQueryParameter("pageSize", PAGE_SIZE.toString())
+            addQueryParameter("withTotal", "1")
         }.build()
-        return GET(url, headers)
+        return GET(url, apiHeaders)
     }
 
     override fun getFilterList() = FilterList(

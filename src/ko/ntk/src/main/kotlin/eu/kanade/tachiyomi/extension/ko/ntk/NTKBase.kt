@@ -101,7 +101,7 @@ abstract class NTKBase(
             webView.layout(0, 0, 1080, 1920)
 
             webView.settings.userAgentString = request.header("User-Agent")
-                ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ?: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.110 Mobile Safari/537.36 X11; Linux x86_64"
 
             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)

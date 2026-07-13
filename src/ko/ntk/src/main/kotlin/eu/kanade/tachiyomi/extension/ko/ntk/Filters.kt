@@ -71,10 +71,21 @@ internal val wtDayList = listOf(
     FilterOption("일", "일"),
 )
 
+// 웹페이지 HTML의 웹툰 장르 순서와 정확히 1:1 매칭시킨 리스트입니다.
 internal val wtGenreList = listOf(
-    "순정", "판타지", "러브코미디", "드라마", "17", "학원", "라노벨", "개그", "액션", "백합", "SF",
-    "일상", "이세계", "스릴러", "애니화", "전생", "스포츠", "TS", "소년", "먹방", "붕탁", "게임",
-    "호러", "시대", "로맨스", "추리", "무협", "음악", "BL",
+    "학원",      // index 0
+    "액션",      // index 1
+    "SF",        // index 2
+    "스토리",    // index 3
+    "판타지",    // index 4
+    "BL/백합",   // index 5
+    "드라마",    // index 6
+    "로맨스",    // index 7
+    "시대",      // index 8
+    "스포츠",    // index 9
+    "일상",      // index 10
+    "성인",      // index 11
+    "무협",      // index 12
 )
 
 fun buildWtGenreParam(genreFilter: WtGenreFilter?): String? {

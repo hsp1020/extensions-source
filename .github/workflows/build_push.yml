@@ -5,12 +5,9 @@ on:
     branches:
       - main
     paths:
-      - '**'
-      - '!**.md'
-      - '!.github/**'
-      - '.github/scripts/**'
+      - 'src/ko/ntk/**' # NTK 폴더 내부 파일이 수정되었을 때만 자동 빌드가 작동합니다.
       - '.github/workflows/build_push.yml'
-  workflow_dispatch:
+  workflow_dispatch: # 개발자가 직접 깃허브 웹에서 수동으로 빌드를 실행할 수 있게 합니다.
 
 permissions: {}
 
@@ -18,43 +15,11 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
 
-env:
-  CI_CHUNK_SIZE: 80
-  IS_PR_CHECK: false
-
 jobs:
-  prepare:
-    name: Prepare job
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      matrix: ${{ steps.generate-matrices.outputs.matrix }}
-      delete: ${{ steps.generate-matrices.outputs.delete }}
-    steps:
-      - name: Checkout main branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Get last successful CI commit
-        uses: nrwl/nx-set-shas@afb73a62d26e41464e9254689e1fd6122ee683c1 # v5.0.1
-        with:
-          fallback-sha: 4b825dc642cb6eb9a060e54bf8d69288fbee4904 # empty tree
-
-      - id: generate-matrices
-        name: Create output matrices
-        run: |
-          python ./.github/scripts/generate-build-matrices.py "$NX_BASE" Release
-
   build:
-    name: Build extensions (${{ matrix.chunk.number }})
-    needs: prepare
+    name: Build NTK extension
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    if: ${{ toJson(fromJson(needs.prepare.outputs.matrix).chunk) != '[]' }}
-    strategy:
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    timeout-minutes: 15
     steps:
       - name: Checkout main branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -69,27 +34,25 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
-        with:
-          cache-read-only: ${{ matrix.chunk.number > 1 }}
 
       - name: Prepare signing key
         run: |
           echo "${{ secrets.SIGNING_KEY }}" | base64 -di > signingkey.jks
 
-      - name: Build extensions (${{ matrix.chunk.number }})
+      # 오직 NTK 프로젝트만 찝어서 릴리즈용 APK를 빌드합니다.
+      - name: Build NTK Only
         env:
-          MODULES: ${{ join(matrix.chunk.modules, ' ') }}
           ALIAS: ${{ secrets.ALIAS }}
           KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          ./gradlew $MODULES
+          ./gradlew :src:ko:ntk:assembleRelease
 
-      - name: Upload APKs (${{ matrix.chunk.number }})
+      - name: Upload APKs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: "github.repository == 'hsp1020/extensions-source'"
         with:
-          name: "individual-apks-${{ matrix.chunk.number }}"
+          name: "individual-apks-1"
           path: "**/*.apk"
           retention-days: 1
 
@@ -98,7 +61,7 @@ jobs:
 
   publish:
     name: Publish extension repo
-    needs: [prepare, build]
+    needs: [build]
     if: "github.repository == 'hsp1020/extensions-source'"
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -141,7 +104,7 @@ jobs:
 
       - name: Merge and deploy repo
         env:
-          DELETE: ${{ needs.prepare.outputs.delete }}
+          DELETE: ""
         run: |
           cd repo
           pip install protobuf

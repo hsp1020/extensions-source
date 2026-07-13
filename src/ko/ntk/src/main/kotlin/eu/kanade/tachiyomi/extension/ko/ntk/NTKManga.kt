@@ -39,7 +39,8 @@ class NTKManga : NTKBase("NTK Manga", "manhwa") {
         val statusParam = statusFilter?.let { statusList[it.state].value } ?: statusList[0].value
         val genreParam = buildGenreParam(genreFilter)
 
-        val apiStatus = if (statusParam == "-end") "end" else "ongoing"
+        // 👈 [해결 핵심] 기존 "-end" 상태일 때, 서버에 보낼 API 상태 파라미터 값을 "completed"로 지정합니다.
+        val apiStatus = if (statusParam == "-end") "completed" else "ongoing"
 
         val url = "$rootUrl/api/manhwa-list".toHttpUrl().newBuilder().apply {
             addQueryParameter("status", apiStatus)

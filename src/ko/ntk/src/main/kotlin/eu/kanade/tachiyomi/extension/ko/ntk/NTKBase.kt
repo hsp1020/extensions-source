@@ -363,8 +363,42 @@ abstract class NTKBase(
 
     private val dateFormat = SimpleDateFormat("yy.MM.dd", Locale.KOREA)
 
+    // 기존의 chapterListParse를 아래 코드로 통째로 대체합니다.
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
+        val chapters = mutableListOf<SChapter>()
+
+        // 1. 우선 첫 번째 페이지(현재 수신한 페이지)의 회차들을 파싱하여 리스트에 담습니다.
+        chapters.addAll(parseChaptersFromDocument(document))
+
+        // 2. 하단 페이징 영역에서 epage=가 들어간 링크들을 모두 찾아 그중 가장 높은 페이지 번호(maxPage)를 추출합니다.
+        // 페이징 버튼이 없거나 찾을 수 없다면 기본값인 1페이지로 설정합니다.
+        val maxPage = document.select(".episode-pager a[href*=epage=]")
+            .mapNotNull { it.attr("href").substringAfter("epage=").toIntOrNull() }
+            .maxOrNull() ?: 1
+
+        // 3. 만약 2페이지 이상 존재한다면, 2페이지부터 끝까지 순차적으로 요청하여 회차를 추가로 파싱합니다.
+        for (page in 2..maxPage) {
+            // 기존 URL 구조를 해치지 않고 안전하게 쿼리 파라미터(?epage=숫자)만 덧붙여 요청 URL을 빌드합니다.
+            val pageUrl = response.request.url.newBuilder()
+                .setQueryParameter("epage", page.toString())
+                .build()
+            
+            val pageRequest = GET(pageUrl, headers)
+            val pageResponse = client.newCall(pageRequest).execute()
+            
+            if (pageResponse.isSuccessful) {
+                val pageDocument = pageResponse.asJsoup()
+                chapters.addAll(parseChaptersFromDocument(pageDocument))
+            }
+            pageResponse.close()
+        }
+
+        return chapters
+    }
+
+    // 반복적인 회차 HTML 엘리먼트 파싱을 담당하는 전용 헬퍼 함수를 추가합니다.
+    private fun parseChaptersFromDocument(document: org.jsoup.nodes.Document): List<SChapter> {
         return document.select("ul.ep-list-v2 > li.ep-row-v2").map { element ->
             SChapter.create().apply {
                 setUrlWithoutDomain(element.select("a.ep-row-v2-link").attr("href"))

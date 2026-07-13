@@ -252,7 +252,7 @@ abstract class NTKBase(
         val document = response.asJsoup()
         val mangas = document.select("div.card-grid > a.card").map { element ->
             SManga.create().apply {
-                setUrlWithoutDomain(element.attr("href")) // 👈 absUrl 대신 attr("href")를 사용하여 원천적으로 이중 도메인 버그를 차단합니다.
+                setUrlWithoutDomain(element.absUrl("href"))
                 title = element.select("p.subject").text()
                 thumbnail_url = element.select("div.thumb img:not(.platform-icon)").attr("abs:src")
             }
@@ -363,38 +363,8 @@ abstract class NTKBase(
 
     private val dateFormat = SimpleDateFormat("yy.MM.dd", Locale.KOREA)
 
-
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
-        val chapters = mutableListOf<SChapter>()
-
-        // 1페이지 회차를 즉시 파싱합니다.
-        chapters.addAll(parseChaptersFromDocument(document))
-
-        // 하단 페이징 버튼들에서 최대 epage 번호를 안전하게 추출합니다.
-        val maxPage = document.select(".episode-pager a[href*=epage=]")
-            .mapNotNull { it.attr("href").substringAfter("epage=").toIntOrNull() }
-            .maxOrNull() ?: 1
-
-        // 2페이지부터 끝까지 순차 루프하여 병합합니다.
-        for (page in 2..maxPage) {
-            val pageUrl = response.request.url.newBuilder()
-                .setQueryParameter("epage", page.toString())
-                .build()
-            
-            // OkHttp Connection Pool이 유지되므로 네트워크 연결 속도는 충분히 빠릅니다.
-            val pageResponse = client.newCall(GET(pageUrl, headers)).execute()
-            if (pageResponse.isSuccessful) {
-                val pageDocument = pageResponse.asJsoup()
-                chapters.addAll(parseChaptersFromDocument(pageDocument))
-            }
-            pageResponse.close() // 소켓 리소스 유실 방지를 위해 반드시 즉시 닫아줍니다.
-        }
-
-        return chapters
-    }
-
-    private fun parseChaptersFromDocument(document: org.jsoup.nodes.Document): List<SChapter> {
         return document.select("ul.ep-list-v2 > li.ep-row-v2").map { element ->
             SChapter.create().apply {
                 setUrlWithoutDomain(element.select("a.ep-row-v2-link").attr("href"))

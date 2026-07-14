@@ -42,23 +42,23 @@ samWithReceiver {
 gradlePlugin {
     plugins {
         register("android-base") {
-            id = "kei.plugins.android.base"
+            id = kei.plugins.android.base.get().pluginId
             implementationClass = "PluginAndroidBase"
         }
         register("extension") {
-            id = "kei.plugins.extension.legacy"
+            id = kei.plugins.extension.legacy.get().pluginId
             implementationClass = "PluginExtensionLegacy"
         }
         register("library") {
-            id = "kei.plugins.library"
+            id = kei.plugins.library.get().pluginId
             implementationClass = "PluginLibrary"
         }
         register("multisrc") {
-            id = "kei.plugins.theme"
+            id = kei.plugins.multisrc.get().pluginId
             implementationClass = "PluginMultiSrc"
         }
         register("spotless") {
-            id = "kei.plugins.spotless"
+            id = kei.plugins.spotless.get().pluginId
             implementationClass = "PluginSpotless"
         }
     }

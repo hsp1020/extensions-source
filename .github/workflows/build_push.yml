@@ -133,7 +133,6 @@ jobs:
           FINGERPRINT=$(cat ~/fingerprint/fingerprint.txt)
           cat <<EOF > repo.json
           {
-            "index_v2": "https://github.com/hsp1020/extensions/raw/repo/index.pb",
             "meta": {
               "name": "hsp1020 Extensions",
               "website": "https://github.com/hsp1020/extensions",

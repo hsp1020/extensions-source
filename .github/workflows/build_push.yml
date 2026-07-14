@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'src/ko/ntk/**'
+      - 'src/ko/navercomic/**'
       - '.github/workflows/build_push.yml'
   workflow_dispatch:
 
@@ -17,7 +18,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build NTK extension
+    name: Build extensions
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -45,15 +46,15 @@ jobs:
           FINGERPRINT=$(keytool -list -v -keystore signingkey.jks -alias hsp-key -storepass 846845 | grep -i SHA256 | awk '{print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')
           echo "$FINGERPRINT" > fingerprint.txt
 
-      # 빌드 전 서식을 자동 교정(spotlessApply)한 후 NTK 익스텐션만 빌드합니다.
-      - name: Build NTK Only
+      # 빌드 전 서식을 자동 교정(spotlessApply)한 후 익스텐션을 빌드합니다.
+      - name: Build Extensions
         env:
           ALIAS: ${{ secrets.ALIAS }}
           KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          ./gradlew :src:ko:ntk:spotlessApply
-          ./gradlew :src:ko:ntk:assembleRelease
+          ./gradlew :src:ko:ntk:spotlessApply :src:ko:navercomic:spotlessApply
+          ./gradlew :src:ko:ntk:assembleRelease :src:ko:navercomic:assembleRelease
 
       - name: Upload APKs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -126,7 +127,7 @@ jobs:
           # 1. 포크하면서 따라온 기존의 400여 개 잔여 파일들을 완전히 정리합니다.
           find . -maxdepth 1 ! -name '.' ! -name '..' ! -name '.git' -exec rm -rf {} +
           
-          # 2. 이번에 빌드된 새 데이터(index.json, index.pb, apk 폴더 등)를 덮어씌웁니다.
+          # 2. 이번에 빌드된 새 데이터(index.json, apk 폴더 등)를 덮어씌웁니다.
           cp -r ../main/repo/* .
           
           # 3. 내 고유 서명 키 지문 정보가 들어간 유효한 repo.json 파일을 동적 생성합니다.

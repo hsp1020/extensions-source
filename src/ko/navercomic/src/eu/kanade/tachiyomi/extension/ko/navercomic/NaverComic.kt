@@ -105,7 +105,7 @@ abstract class NaverComic : HttpSource() {
 
     override fun mangaDetailsParse(response: Response): SManga = response.parseAs<Manga>().toSManga(mType)
 
-    // ============================= Chapters ==============================
+    // ============================= Chapters ===============================
 
     override fun chapterListRequest(manga: SManga): Request = chapterListRequest(manga.url, 1)
 

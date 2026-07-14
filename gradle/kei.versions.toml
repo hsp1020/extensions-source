@@ -8,6 +8,7 @@ java = "11"
 [plugins]
 android-base = { id = "kei.plugins.android.base" }
 extension = { id = "kei.plugins.extension" }
+extension-legacy = { id = "kei.plugins.extension.legacy" }
 library = { id = "kei.plugins.library" }
 spotless = { id = "kei.plugins.spotless" }
 multisrc = { id = "kei.plugins.theme" }

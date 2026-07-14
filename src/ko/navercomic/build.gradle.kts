@@ -1,9 +1,7 @@
 import io.github.keiyoushi.gradle.api.ContentWarning
 
 plugins {
-    // 고장난 alias(kei.plugins.extension) 대신
-    // 문자열 ID로 직접 플러그인을 불러옵니다!
-    id("kei.plugins.extension")
+    alias(kei.plugins.extension)
 }
 
 keiyoushi {

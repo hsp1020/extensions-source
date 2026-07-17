@@ -1,7 +1,7 @@
 ext {
     extName = 'Naver Comic'
     extClass = '.NaverComicFactory'
-    extVersionCode = 22
+    extVersionCode = 23
     isNsfw = false
 }
 

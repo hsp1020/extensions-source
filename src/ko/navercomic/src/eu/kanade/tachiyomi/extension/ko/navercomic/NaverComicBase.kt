@@ -38,9 +38,8 @@ abstract class NaverComicBase(protected val mType: String) : HttpSource() {
         }
         .build()
 
-    // [수정] 타치요미 앱의 기본 User-Agent를 동적으로 가져와서 웹뷰와 완벽하게 동기화
+    // [수정] 타치요미 기본 User-Agent는 super.headersBuilder()에 이미 자동으로 포함되어 있으므로 Referer만 추가합니다.
     override fun headersBuilder() = super.headersBuilder()
-        .add("User-Agent", network.defaultUserAgentProvider())
         .add("Referer", "$baseUrl/")
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$baseUrl/api/search/$mType?keyword=$query&page=$page", headers)
@@ -114,7 +113,7 @@ abstract class NaverComicChallengeBase(mType: String) : NaverComicBase(mType) {
         val apiMangaResponse = response.parseAs<ApiMangaChallengeResponse>()
         val mangas = apiMangaResponse.toSMangas(mType)
 
-        // [수정] 베도/도전만화의 이중 통신 병목(pageInfo 재요청)을 베이스 클래스에서 원천 삭제하여 속도 2배 향상
+        // 베도/도전만화의 이중 통신 병목(pageInfo 재요청)을 베이스 클래스에서 원천 삭제하여 속도 2배 향상
         val hasNextPage = mangas.size >= 30
 
         return MangasPage(mangas, hasNextPage)

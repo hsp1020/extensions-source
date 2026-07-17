@@ -26,6 +26,7 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     override fun popularMangaRequest(page: Int): Request {
         val url = "$baseUrl/api/webtoon/titlelist/weekday".toHttpUrl().newBuilder()
             .addQueryParameter("order", "USER")
+            .addQueryParameter("page", page.toString()) // 수동 페이징 처리를 위해 페이지 파라미터 추가
             .build()
         return GET(url, headers)
     }
@@ -35,6 +36,7 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     override fun latestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/api/webtoon/titlelist/weekday".toHttpUrl().newBuilder()
             .addQueryParameter("order", "UPDATE")
+            .addQueryParameter("page", page.toString()) // 수동 페이징 처리를 위해 페이지 파라미터 추가
             .build()
         return GET(url, headers)
     }
@@ -78,21 +80,24 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
 
+        // 일반 키워드 검색일 경우
         if (jsonObject.containsKey("searchList")) {
             val result = json.decodeFromJsonElement<ApiMangaSearchResponse>(jsonObject)
             return MangasPage(result.toSMangas(mType), result.hasNextPage)
         }
 
-        return parseWebtoonListJson(jsonObject)
+        return parseWebtoonListJson(response, jsonObject)
     }
 
     private fun parseWebtoonList(response: Response): MangasPage {
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
-        return parseWebtoonListJson(jsonObject)
+        return parseWebtoonListJson(response, jsonObject)
     }
 
-    private fun parseWebtoonListJson(jsonObject: kotlinx.serialization.json.JsonObject): MangasPage {
+    private fun parseWebtoonListJson(response: Response, jsonObject: kotlinx.serialization.json.JsonObject): MangasPage {
+        // 현재 요청한 페이지 번호 파악
+        val page = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
         val titleList = mutableListOf<Manga>()
         
         if (jsonObject.containsKey("titleList")) {
@@ -102,10 +107,25 @@ class NaverWebtoon : NaverComicBase("webtoon") {
             map.values.forEach { titleList.addAll(it) }
         }
 
-        val pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
-        val hasNextPage = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
+        // 중복 제거
+        var mangas = titleList.map { it.toSManga(mType) }.distinctBy { it.url }
+        var hasNextPage = false
 
-        val mangas = titleList.map { it.toSManga(mType) }.distinctBy { it.url }
+        val pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
+        
+        // 1. API 자체적으로 페이징을 지원하는 경우 (장르, 완결 탭 등)
+        if (pageInfo != null) {
+            hasNextPage = pageInfo.nextPage != 0
+        } 
+        // 2. 요일 전체보기처럼 600개의 웹툰을 한 번에 던져주는 경우 -> 수동 페이징 처리 (렉 방지 핵심)
+        else {
+            val pageSize = 50 // 한 페이지당 50개씩만 출력하여 앱 프리징 방지
+            val startIndex = (page - 1) * pageSize
+            val endIndex = startIndex + pageSize
+            
+            hasNextPage = mangas.size > endIndex
+            mangas = mangas.drop(startIndex).take(pageSize)
+        }
 
         return MangasPage(mangas, hasNextPage)
     }
@@ -239,7 +259,6 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
-        // 키워드 검색의 API 응답(/api/search/...)과 리스트 필터 응답(/api/bestChallenge/list...) 분기 처리
         if (response.request.url.encodedPath.contains("/search/")) {
             return super.searchMangaParse(response)
         }

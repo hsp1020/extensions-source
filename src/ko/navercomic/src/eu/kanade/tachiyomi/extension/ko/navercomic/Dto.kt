@@ -16,7 +16,7 @@ class ApiMangaSearchResponse(
 @Serializable
 class ApiMangaChallengeResponse(
     val pageInfo: PageInfo? = null,
-    private val list: List<MangaChallenge>,
+    val list: List<MangaChallenge>, // [수정] 외부 접근을 위해 private 제거
 ) {
     fun toSMangas(mType: String): List<SManga> = list.map { it.toSManga(mType) }
 }
@@ -83,6 +83,8 @@ class MangaChallenge(
     private val thumbnailUrl: String,
     private val titleName: String,
     private val titleId: Int,
+    val starScore: Double = 0.0, // [수정] 베도/도전 로컬 정렬을 위해 별점 변수 추가
+    val viewCount: Long = 0L,   // [수정] 베도/도전 로컬 정렬을 위해 조회수 변수 추가
 ) {
     fun toSManga(mType: String) = SManga.create().apply {
         title = titleName

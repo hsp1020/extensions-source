@@ -57,18 +57,24 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val url = baseUrl.toHttpUrl().newBuilder().apply {
             if (dayParam == "finished") {
                 addPathSegments("api/webtoon/titlelist/finished")
+                addQueryParameter("order", sortParam)
+                addQueryParameter("page", page.toString())
             } else if (genreParam.isNotEmpty() && dayParam.isEmpty()) {
                 addPathSegments("api/webtoon/titlelist/genre")
                 addQueryParameter("genre", genreParam)
+                
+                // [해결] 장르 탭 전용 별점순 파라미터(STAR) 예외 처리
+                val finalSortParam = if (sortParam == "STAR_SCORE") "STAR" else sortParam
+                addQueryParameter("order", finalSortParam)
+                addQueryParameter("page", page.toString())
             } else {
                 addPathSegments("api/webtoon/titlelist/weekday")
                 if (dayParam.isNotEmpty()) {
                     addQueryParameter("week", dayParam)
                 }
+                addQueryParameter("order", sortParam)
+                addQueryParameter("page", page.toString())
             }
-            
-            addQueryParameter("order", sortParam)
-            addQueryParameter("page", page.toString())
         }.build()
 
         return GET(url, headers)
@@ -78,6 +84,7 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
 
+        // 일반 키워드 검색 시 searchList 처리
         if (jsonObject.containsKey("searchList")) {
             val result = json.decodeFromJsonElement<ApiMangaSearchResponse>(jsonObject)
             return MangasPage(result.toSMangas(mType), result.hasNextPage)
@@ -95,28 +102,27 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     private fun parseWebtoonListJson(response: Response, jsonObject: kotlinx.serialization.json.JsonObject): MangasPage {
         val allMangas = mutableListOf<Manga>()
         
-        // 1. 단일 리스트 형태 (장르, 완결, 특정 요일 단일 선택 시)
         if (jsonObject.containsKey("titleList")) {
             allMangas.addAll(json.decodeFromJsonElement<List<Manga>>(jsonObject["titleList"]!!))
-        } 
-        // 2. Map 형태 (요일 '전체' 선택 시 서버가 MONDAY, TUESDAY 등으로 묶어서 보냄)
-        else if (jsonObject.containsKey("titleListMap")) {
+        } else if (jsonObject.containsKey("titleListMap")) {
             val map = json.decodeFromJsonElement<Map<String, List<Manga>>>(jsonObject["titleListMap"]!!)
             val sortParam = response.request.url.queryParameter("order") ?: "USER"
             
-            if (sortParam == "STAR_SCORE") {
+            if (sortParam == "STAR_SCORE" || sortParam == "STAR") {
                 val flatList = map.values.flatten()
                 allMangas.addAll(flatList.sortedByDescending { it.starScore })
             } else if (sortParam == "VIEW") {
                 val flatList = map.values.flatten()
                 allMangas.addAll(flatList.sortedByDescending { it.viewCount })
             } else {
-                // [핵심 해결] 인기순(USER) 및 업데이트순(UPDATE)일 경우
-                // 월 1등, 화 1등, 수 1등... 식으로 교차(Round-Robin)하여 리스트에 추가합니다.
+                // 월~일 순서를 명시적으로 배열로 선언하여 강제 순회 (무작위 배치 방지)
+                val daysOrder = listOf("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY", "DAILY_PLUS")
                 val maxLen = map.values.maxOfOrNull { it.size } ?: 0
+                
                 for (i in 0 until maxLen) {
-                    map.values.forEach { list ->
-                        if (i < list.size) {
+                    for (day in daysOrder) {
+                        val list = map[day]
+                        if (list != null && i < list.size) {
                             allMangas.add(list[i])
                         }
                     }
@@ -124,13 +130,11 @@ class NaverWebtoon : NaverComicBase("webtoon") {
             }
         }
 
-        // 중복 제거 (여러 요일에 동시 연재하는 작품 필터링)
         val mangas = allMangas.map { it.toSManga(mType) }.distinctBy { it.url }
 
         val pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
         val hasNextPage = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
 
-        // 1페이지에 전부 담아 렉 없이 즉시 로딩되도록 최적화
         return MangasPage(mangas, hasNextPage)
     }
 
@@ -143,7 +147,7 @@ class NaverWebtoon : NaverComicBase("webtoon") {
 }
 
 // ==========================================
-// 정식 연재 전용 필터 데이터 (세부 태그 포함)
+// 정식 연재 전용 필터 데이터
 // ==========================================
 data class FilterOption(val name: String, val value: String)
 
@@ -151,7 +155,7 @@ internal val sortList = listOf(
     FilterOption("인기순", "USER"),
     FilterOption("업데이트순", "UPDATE"),
     FilterOption("조회순", "VIEW"),
-    FilterOption("별점순", "STAR_SCORE"),
+    FilterOption("별점순", "STAR_SCORE"), // 내부적으로 장르 탭일 경우 STAR로 자동 변환됨
 )
 
 internal val genreList = listOf(
@@ -169,6 +173,7 @@ internal val genreList = listOf(
     FilterOption("드라마&영화 원작웹툰", "드라마&영화 원작웹툰"),
     FilterOption("먼치킨", "먼치킨"),
     FilterOption("학원로맨스", "학원로맨스"),
+    FilterOption("학원액션", "학원액션"), 
     FilterOption("로판", "로판"),
     FilterOption("게임판타지", "게임판타지"),
     FilterOption("소년물", "소년물"),
@@ -202,12 +207,12 @@ class DayFilter : Filter.Select<String>("요일 / 완결", dayList.map { it.name
 
 
 // ==========================================
-// 베스트도전 / 도전만화 전용 필터 데이터 (대분류만 지원)
+// 베스트도전 / 도전만화 전용 필터 데이터
 // ==========================================
 internal val challengeSortList = listOf(
     FilterOption("조회순", "VIEW"),
     FilterOption("업데이트순", "UPDATE"),
-    FilterOption("별점순", "STAR_SCORE"),
+    FilterOption("별점순", "starScore"), // 백엔드 API 규칙에 맞춘 소문자
 )
 
 internal val challengeGenreList = listOf(

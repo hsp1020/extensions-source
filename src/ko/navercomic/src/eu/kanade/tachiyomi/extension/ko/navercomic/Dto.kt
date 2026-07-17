@@ -48,7 +48,7 @@ class MangaChapter(
     }
 }
 
-// [추가] 연령, 장르, 태그 파싱을 위한 보조 클래스들
+// 연령, 장르, 태그 파싱을 위한 보조 클래스들
 @Serializable
 class AgeInfo(val description: String)
 
@@ -72,7 +72,8 @@ class Manga(
     val starScore: Double = 0.0,
     val viewCount: Long = 0L,
     
-    // [추가] 상세 페이지 태그 표시용 변수들
+    // 상세 페이지 태그 표시용 변수들
+    private val publishDescription: String? = null, // [추가] "월요웹툰", "완결웹툰" 등
     private val age: AgeInfo? = null,
     private val genres: List<GenreInfo> = emptyList(),
     private val curationTagList: List<CurationTag> = emptyList(),
@@ -92,9 +93,10 @@ class Manga(
             else -> SManga.ONGOING
         }
 
-        // [추가] 연령, 장르, 태그들을 모아서 쉼표로 연결 (타치요미 UI에서 Chip 형태로 표시됨)
+        // 연재 요일, 연령, 장르, 태그들을 모아서 쉼표로 연결 (타치요미 UI에서 Chip 형태로 표시됨)
         val tags = mutableListOf<String>()
         
+        publishDescription?.takeIf { it.isNotEmpty() }?.let { tags.add(it) } // 가장 맨 앞에 연재 요일 추가
         age?.description?.let { tags.add(it) } // ex) "15세 이용가", "전체연령가"
         genres.forEach { tags.add(it.description) } // 베도/도전 대분류 장르
         curationTagList.forEach { tags.add(it.tagName) } // 정식 연재 장르 및 세부 태그

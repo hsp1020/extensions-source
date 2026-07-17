@@ -51,14 +51,17 @@ class MangaChapter(
 @Serializable
 class Manga(
     private val thumbnailUrl: String? = null,
-    private val posterThumbnailUrl: String? = null, // 요일/장르 API 등에서 넘어올 수 있는 썸네일 추가 대응
+    private val posterThumbnailUrl: String? = null,
     private val titleName: String,
     private val titleId: Int,
     private val finished: Boolean = false,
     private val rest: Boolean = false,
-    private val communityArtists: List<Author> = emptyList(), // 검색 API에서 넘어오는 작가 리스트
+    private val communityArtists: List<Author> = emptyList(),
     private val synopsis: String = "",
-    private val author: String? = null, // 요일/장르 API에서 넘어오는 단일 작가 문자열
+    private val author: String? = null,
+    // 👇 정렬 기능(별점, 조회수)을 위해 이 두 변수가 반드시 있어야 합니다!
+    val starScore: Double = 0.0,
+    val viewCount: Long = 0L,
 ) {
     fun toSManga(mType: String) = SManga.create().apply {
         title = titleName
@@ -66,7 +69,6 @@ class Manga(
         thumbnail_url = thumbnailUrl ?: posterThumbnailUrl ?: ""
         url = "/$mType/list?titleId=$titleId"
         
-        // 검색 API인지, 목록 API인지에 따라 작가명이 들어오는 필드가 다르므로 분기 처리
         this.author = this@Manga.author ?: communityArtists.joinToString { it.name }
         
         status = when {

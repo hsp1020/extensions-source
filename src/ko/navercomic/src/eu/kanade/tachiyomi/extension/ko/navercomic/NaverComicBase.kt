@@ -26,7 +26,7 @@ abstract class NaverComicBase(protected val mType: String) : HttpSource() {
 
     protected open val dateFormat = SimpleDateFormat("yy.MM.dd", Locale.KOREA)
 
-    // [추가] 401(권한 없음), 403(접근 금지) 에러 발생 시 사용자에게 로그인/성인인증 안내
+    // 401(권한 없음), 403(접근 금지) 에러 발생 시 사용자에게 로그인/성인인증 안내
     override val client = network.client.newBuilder()
         .addInterceptor { chain ->
             val response = chain.proceed(chain.request())
@@ -38,7 +38,6 @@ abstract class NaverComicBase(protected val mType: String) : HttpSource() {
         }
         .build()
 
-    // [수정] 타치요미 기본 User-Agent는 super.headersBuilder()에 이미 자동으로 포함되어 있으므로 Referer만 추가합니다.
     override fun headersBuilder() = super.headersBuilder()
         .add("Referer", "$baseUrl/")
 
@@ -52,6 +51,11 @@ abstract class NaverComicBase(protected val mType: String) : HttpSource() {
     override fun mangaDetailsRequest(manga: SManga): Request {
         val titleId = (baseUrl + manga.url).toHttpUrl().queryParameter("titleId")
         return GET("$baseUrl/api/article/list/info?titleId=$titleId", headers)
+    }
+
+    // [핵심 해결] 지구본(웹뷰) 버튼 클릭 시 JSON API가 아닌 실제 웹페이지로 연결되도록 URL 강제 지정
+    override fun getMangaUrl(manga: SManga): String {
+        return baseUrl + manga.url
     }
 
     override fun mangaDetailsParse(response: Response): SManga = response.parseAs<Manga>().toSManga(mType)
@@ -113,7 +117,6 @@ abstract class NaverComicChallengeBase(mType: String) : NaverComicBase(mType) {
         val apiMangaResponse = response.parseAs<ApiMangaChallengeResponse>()
         val mangas = apiMangaResponse.toSMangas(mType)
 
-        // 베도/도전만화의 이중 통신 병목(pageInfo 재요청)을 베이스 클래스에서 원천 삭제하여 속도 2배 향상
         val hasNextPage = mangas.size >= 30
 
         return MangasPage(mangas, hasNextPage)

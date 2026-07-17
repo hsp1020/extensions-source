@@ -26,7 +26,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     override fun popularMangaRequest(page: Int): Request {
         val url = "$baseUrl/api/webtoon/titlelist/weekday".toHttpUrl().newBuilder()
             .addQueryParameter("order", "USER")
-            .addQueryParameter("page", page.toString()) // 수동 페이징 처리를 위해 페이지 파라미터 추가
             .build()
         return GET(url, headers)
     }
@@ -36,7 +35,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     override fun latestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/api/webtoon/titlelist/weekday".toHttpUrl().newBuilder()
             .addQueryParameter("order", "UPDATE")
-            .addQueryParameter("page", page.toString()) // 수동 페이징 처리를 위해 페이지 파라미터 추가
             .build()
         return GET(url, headers)
     }
@@ -80,7 +78,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
 
-        // 일반 키워드 검색일 경우
         if (jsonObject.containsKey("searchList")) {
             val result = json.decodeFromJsonElement<ApiMangaSearchResponse>(jsonObject)
             return MangasPage(result.toSMangas(mType), result.hasNextPage)
@@ -96,37 +93,44 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     }
 
     private fun parseWebtoonListJson(response: Response, jsonObject: kotlinx.serialization.json.JsonObject): MangasPage {
-        // 현재 요청한 페이지 번호 파악
-        val page = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
-        val titleList = mutableListOf<Manga>()
+        val allMangas = mutableListOf<Manga>()
         
+        // 1. 단일 리스트 형태 (장르, 완결, 특정 요일 단일 선택 시)
         if (jsonObject.containsKey("titleList")) {
-            titleList.addAll(json.decodeFromJsonElement<List<Manga>>(jsonObject["titleList"]!!))
-        } else if (jsonObject.containsKey("titleListMap")) {
+            allMangas.addAll(json.decodeFromJsonElement<List<Manga>>(jsonObject["titleList"]!!))
+        } 
+        // 2. Map 형태 (요일 '전체' 선택 시 서버가 MONDAY, TUESDAY 등으로 묶어서 보냄)
+        else if (jsonObject.containsKey("titleListMap")) {
             val map = json.decodeFromJsonElement<Map<String, List<Manga>>>(jsonObject["titleListMap"]!!)
-            map.values.forEach { titleList.addAll(it) }
+            val sortParam = response.request.url.queryParameter("order") ?: "USER"
+            
+            if (sortParam == "STAR_SCORE") {
+                val flatList = map.values.flatten()
+                allMangas.addAll(flatList.sortedByDescending { it.starScore })
+            } else if (sortParam == "VIEW") {
+                val flatList = map.values.flatten()
+                allMangas.addAll(flatList.sortedByDescending { it.viewCount })
+            } else {
+                // [핵심 해결] 인기순(USER) 및 업데이트순(UPDATE)일 경우
+                // 월 1등, 화 1등, 수 1등... 식으로 교차(Round-Robin)하여 리스트에 추가합니다.
+                val maxLen = map.values.maxOfOrNull { it.size } ?: 0
+                for (i in 0 until maxLen) {
+                    map.values.forEach { list ->
+                        if (i < list.size) {
+                            allMangas.add(list[i])
+                        }
+                    }
+                }
+            }
         }
 
-        // 중복 제거
-        var mangas = titleList.map { it.toSManga(mType) }.distinctBy { it.url }
-        var hasNextPage = false
+        // 중복 제거 (여러 요일에 동시 연재하는 작품 필터링)
+        val mangas = allMangas.map { it.toSManga(mType) }.distinctBy { it.url }
 
         val pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
-        
-        // 1. API 자체적으로 페이징을 지원하는 경우 (장르, 완결 탭 등)
-        if (pageInfo != null) {
-            hasNextPage = pageInfo.nextPage != 0
-        } 
-        // 2. 요일 전체보기처럼 600개의 웹툰을 한 번에 던져주는 경우 -> 수동 페이징 처리 (렉 방지 핵심)
-        else {
-            val pageSize = 50 // 한 페이지당 50개씩만 출력하여 앱 프리징 방지
-            val startIndex = (page - 1) * pageSize
-            val endIndex = startIndex + pageSize
-            
-            hasNextPage = mangas.size > endIndex
-            mangas = mangas.drop(startIndex).take(pageSize)
-        }
+        val hasNextPage = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
 
+        // 1페이지에 전부 담아 렉 없이 즉시 로딩되도록 최적화
         return MangasPage(mangas, hasNextPage)
     }
 

@@ -354,20 +354,20 @@ internal fun parseChallengeBatch(
 class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
     override val name = "Naver Webtoon Best Challenge"
     private val json = Json { ignoreUnknownKeys = true }
-    private val BATCH_SIZE = 4 // 1번 스크롤 시 4페이지(120개)를 동시에 로드하여 렉 최소화
+    private val batchSize = 4 // 1번 스크롤 시 4페이지(120개)를 동시에 로드하여 렉 최소화
 
     override fun popularMangaRequest(page: Int): Request {
-        val apiPage = (page - 1) * BATCH_SIZE + 1
+        val apiPage = (page - 1) * batchSize + 1
         return GET("$baseUrl/api/$mType/list?order=VIEW&page=$apiPage", headers)
     }
 
     override fun latestUpdatesRequest(page: Int): Request {
-        val apiPage = (page - 1) * BATCH_SIZE + 1
+        val apiPage = (page - 1) * batchSize + 1
         return GET("$baseUrl/api/$mType/list?order=UPDATE&page=$apiPage", headers)
     }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val apiPage = (page - 1) * BATCH_SIZE + 1
+        val apiPage = (page - 1) * batchSize + 1
         
         if (query.isNotEmpty()) {
             val url = "$baseUrl/api/search/$mType".toHttpUrl().newBuilder()
@@ -395,9 +395,9 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
     }
 
     // 병렬 파싱 로직 적용
-    override fun popularMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
-    override fun latestUpdatesParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
-    override fun searchMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
+    override fun popularMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, batchSize)
+    override fun latestUpdatesParse(response: Response) = parseChallengeBatch(response, json, mType, client, batchSize)
+    override fun searchMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, batchSize)
 
     override fun getFilterList() = FilterList(
         Filter.Header("키워드 검색 시 아래 필터는 무시됩니다."),
@@ -414,20 +414,20 @@ class NaverChallenge : NaverComicChallengeBase("challenge") {
     override val dateFormat = SimpleDateFormat("yyyy.MM.dd", Locale.KOREA)
     
     private val json = Json { ignoreUnknownKeys = true }
-    private val BATCH_SIZE = 4 // 1번 스크롤 시 4페이지(120개)를 동시에 로드하여 렉 최소화
+    private val batchSize = 4 // 1번 스크롤 시 4페이지(120개)를 동시에 로드하여 렉 최소화
 
     override fun popularMangaRequest(page: Int): Request {
-        val apiPage = (page - 1) * BATCH_SIZE + 1
+        val apiPage = (page - 1) * batchSize + 1
         return GET("$baseUrl/api/$mType/list?order=VIEW&page=$apiPage", headers)
     }
 
     override fun latestUpdatesRequest(page: Int): Request {
-        val apiPage = (page - 1) * BATCH_SIZE + 1
+        val apiPage = (page - 1) * batchSize + 1
         return GET("$baseUrl/api/$mType/list?order=UPDATE&page=$apiPage", headers)
     }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val apiPage = (page - 1) * BATCH_SIZE + 1
+        val apiPage = (page - 1) * batchSize + 1
         
         if (query.isNotEmpty()) {
             val url = "$baseUrl/api/search/$mType".toHttpUrl().newBuilder()
@@ -455,9 +455,9 @@ class NaverChallenge : NaverComicChallengeBase("challenge") {
     }
 
     // 병렬 파싱 로직 적용
-    override fun popularMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
-    override fun latestUpdatesParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
-    override fun searchMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
+    override fun popularMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, batchSize)
+    override fun latestUpdatesParse(response: Response) = parseChallengeBatch(response, json, mType, client, batchSize)
+    override fun searchMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, batchSize)
 
     override fun getFilterList() = FilterList(
         Filter.Header("키워드 검색 시 아래 필터는 무시됩니다."),

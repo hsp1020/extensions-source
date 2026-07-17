@@ -16,7 +16,7 @@ class ApiMangaSearchResponse(
 @Serializable
 class ApiMangaChallengeResponse(
     val pageInfo: PageInfo? = null,
-    private val list: List<MangaChallenge>,
+    val list: List<MangaChallenge>,
 ) {
     fun toSMangas(mType: String): List<SManga> = list.map { it.toSManga(mType) }
 }
@@ -48,6 +48,16 @@ class MangaChapter(
     }
 }
 
+// [추가] 연령, 장르, 태그 파싱을 위한 보조 클래스들
+@Serializable
+class AgeInfo(val description: String)
+
+@Serializable
+class GenreInfo(val description: String)
+
+@Serializable
+class CurationTag(val tagName: String)
+
 @Serializable
 class Manga(
     private val thumbnailUrl: String? = null,
@@ -61,6 +71,12 @@ class Manga(
     private val author: String? = null,
     val starScore: Double = 0.0,
     val viewCount: Long = 0L,
+    
+    // [추가] 상세 페이지 태그 표시용 변수들
+    private val age: AgeInfo? = null,
+    private val genres: List<GenreInfo> = emptyList(),
+    private val curationTagList: List<CurationTag> = emptyList(),
+    private val challengeTagList: List<String> = emptyList(),
 ) {
     fun toSManga(mType: String) = SManga.create().apply {
         title = titleName
@@ -75,6 +91,18 @@ class Manga(
             finished -> SManga.COMPLETED
             else -> SManga.ONGOING
         }
+
+        // [추가] 연령, 장르, 태그들을 모아서 쉼표로 연결 (타치요미 UI에서 Chip 형태로 표시됨)
+        val tags = mutableListOf<String>()
+        
+        age?.description?.let { tags.add(it) } // ex) "15세 이용가", "전체연령가"
+        genres.forEach { tags.add(it.description) } // 베도/도전 대분류 장르
+        curationTagList.forEach { tags.add(it.tagName) } // 정식 연재 장르 및 세부 태그
+        challengeTagList.forEach { tags.add(it) } // 베도/도전 세부 태그
+
+        if (tags.isNotEmpty()) {
+            genre = tags.joinToString(", ")
+        }
     }
 }
 
@@ -83,6 +111,8 @@ class MangaChallenge(
     private val thumbnailUrl: String,
     private val titleName: String,
     private val titleId: Int,
+    val starScore: Double = 0.0,
+    val viewCount: Long = 0L,
 ) {
     fun toSManga(mType: String) = SManga.create().apply {
         title = titleName

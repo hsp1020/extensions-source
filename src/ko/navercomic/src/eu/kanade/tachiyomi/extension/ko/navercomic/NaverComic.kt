@@ -12,7 +12,12 @@ import kotlinx.serialization.json.jsonObject
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
+import java.text.SimpleDateFormat
+import java.util.Locale
 
+// ==========================================
+// 1. 네이버 웹툰 (정식 연재) 클래스
+// ==========================================
 class NaverWebtoon : NaverComicBase("webtoon") {
     override val name = "Naver Webtoon"
 
@@ -37,7 +42,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     override fun latestUpdatesParse(response: Response): MangasPage = parseWebtoonList(response)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // 일반 키워드 검색일 경우 기존 API 호출
         if (query.isNotEmpty()) {
             return super.searchMangaRequest(page, query, filters)
         }
@@ -51,7 +55,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val dayParam = dayFilter?.let { dayList[it.state].value } ?: ""
 
         val url = baseUrl.toHttpUrl().newBuilder().apply {
-            // 필터 우선순위 분기 (요일/완결 > 장르)
             if (dayParam == "finished") {
                 addPathSegments("api/webtoon/titlelist/finished")
             } else if (genreParam.isNotEmpty() && dayParam.isEmpty()) {
@@ -75,13 +78,11 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
 
-        // 일반 키워드 검색 응답 처리 (searchList 포함)
         if (jsonObject.containsKey("searchList")) {
             val result = json.decodeFromJsonElement<ApiMangaSearchResponse>(jsonObject)
             return MangasPage(result.toSMangas(mType), result.hasNextPage)
         }
 
-        // 요일/장르/완결 필터 API 응답 처리
         return parseWebtoonListJson(jsonObject)
     }
 
@@ -94,12 +95,9 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     private fun parseWebtoonListJson(jsonObject: kotlinx.serialization.json.JsonObject): MangasPage {
         val titleList = mutableListOf<Manga>()
         
-        // 단일 리스트 형태 (장르, 완결, 특정 요일 선택 시)
         if (jsonObject.containsKey("titleList")) {
             titleList.addAll(json.decodeFromJsonElement<List<Manga>>(jsonObject["titleList"]!!))
-        } 
-        // Map 형태 (요일 전체 선택 시 MONDAY, TUESDAY 등으로 나뉘어 옴)
-        else if (jsonObject.containsKey("titleListMap")) {
+        } else if (jsonObject.containsKey("titleListMap")) {
             val map = json.decodeFromJsonElement<Map<String, List<Manga>>>(jsonObject["titleListMap"]!!)
             map.values.forEach { titleList.addAll(it) }
         }
@@ -107,7 +105,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
         val hasNextPage = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
 
-        // 요일 '전체' 검색 시 여러 요일에 연재하는 작품이 중복되므로 URL 기준으로 distinct 처리
         val mangas = titleList.map { it.toSManga(mType) }.distinctBy { it.url }
 
         return MangasPage(mangas, hasNextPage)
@@ -121,7 +118,9 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     )
 }
 
-// 필터 데이터 정의
+// ==========================================
+// 정식 연재 전용 필터 데이터 (세부 태그 포함)
+// ==========================================
 data class FilterOption(val name: String, val value: String)
 
 internal val sortList = listOf(
@@ -143,8 +142,6 @@ internal val genreList = listOf(
     FilterOption("스릴러", "THRILL"),
     FilterOption("무협/사극", "HISTORICAL"),
     FilterOption("스포츠", "SPORTS"),
-    
-    // 추가 요청하신 세부 태그 필터 목록
     FilterOption("드라마&영화 원작웹툰", "드라마&영화 원작웹툰"),
     FilterOption("먼치킨", "먼치킨"),
     FilterOption("학원로맨스", "학원로맨스"),
@@ -178,3 +175,126 @@ internal val dayList = listOf(
 class SortFilter : Filter.Select<String>("정렬", sortList.map { it.name }.toTypedArray())
 class GenreFilter : Filter.Select<String>("장르 (요일/완결 선택 시 무시됨)", genreList.map { it.name }.toTypedArray())
 class DayFilter : Filter.Select<String>("요일 / 완결", dayList.map { it.name }.toTypedArray())
+
+
+// ==========================================
+// 베스트도전 / 도전만화 전용 필터 데이터 (대분류만 지원)
+// ==========================================
+internal val challengeSortList = listOf(
+    FilterOption("조회순", "VIEW"),
+    FilterOption("업데이트순", "UPDATE"),
+    FilterOption("별점순", "STAR_SCORE"),
+)
+
+internal val challengeGenreList = listOf(
+    FilterOption("전체", ""),
+    FilterOption("로맨스", "PURE"),
+    FilterOption("액션", "ACTION"),
+    FilterOption("스포츠", "SPORTS"),
+    FilterOption("스릴러", "THRILL"),
+    FilterOption("판타지", "FANTASY"),
+    FilterOption("드라마", "DRAMA"),
+    FilterOption("일상", "DAILY"),
+    FilterOption("개그", "COMIC"),
+    FilterOption("감성", "SENSIBILITY"),
+    FilterOption("무협/사극", "HISTORICAL"),
+    FilterOption("에피소드", "EPISODE"),
+    FilterOption("옴니버스", "OMNIBUS"),
+    FilterOption("스토리", "STORY"),
+)
+
+class ChallengeSortFilter : Filter.Select<String>("정렬", challengeSortList.map { it.name }.toTypedArray())
+class ChallengeGenreFilter : Filter.Select<String>("장르", challengeGenreList.map { it.name }.toTypedArray())
+
+
+// ==========================================
+// 2. 베스트도전 클래스
+// ==========================================
+class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
+    override val name = "Naver Webtoon Best Challenge"
+
+    override fun popularMangaRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=VIEW&page=$page", headers)
+    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=UPDATE&page=$page", headers)
+
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        if (query.isNotEmpty()) {
+            return super.searchMangaRequest(page, query, filters)
+        }
+        
+        val sortFilter = filters.firstInstanceOrNull<ChallengeSortFilter>()
+        val genreFilter = filters.firstInstanceOrNull<ChallengeGenreFilter>()
+        
+        val sortParam = sortFilter?.let { challengeSortList[it.state].value } ?: "VIEW"
+        val genreParam = genreFilter?.let { challengeGenreList[it.state].value } ?: ""
+        
+        val url = "$baseUrl/api/$mType/list".toHttpUrl().newBuilder().apply {
+            addQueryParameter("order", sortParam)
+            addQueryParameter("page", page.toString())
+            if (genreParam.isNotEmpty()) {
+                addQueryParameter("genre", genreParam)
+            }
+        }.build()
+        
+        return GET(url, headers)
+    }
+
+    override fun searchMangaParse(response: Response): MangasPage {
+        // 키워드 검색의 API 응답(/api/search/...)과 리스트 필터 응답(/api/bestChallenge/list...) 분기 처리
+        if (response.request.url.encodedPath.contains("/search/")) {
+            return super.searchMangaParse(response)
+        }
+        return popularMangaParse(response)
+    }
+
+    override fun getFilterList() = FilterList(
+        Filter.Header("키워드 검색 시 아래 필터는 무시됩니다."),
+        ChallengeSortFilter(),
+        ChallengeGenreFilter(),
+    )
+}
+
+// ==========================================
+// 3. 도전만화 클래스
+// ==========================================
+class NaverChallenge : NaverComicChallengeBase("challenge") {
+    override val name = "Naver Webtoon Challenge"
+    override val dateFormat = SimpleDateFormat("yyyy.MM.dd", Locale.KOREA)
+
+    override fun popularMangaRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=VIEW&page=$page", headers)
+    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=UPDATE&page=$page", headers)
+
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        if (query.isNotEmpty()) {
+            return super.searchMangaRequest(page, query, filters)
+        }
+        
+        val sortFilter = filters.firstInstanceOrNull<ChallengeSortFilter>()
+        val genreFilter = filters.firstInstanceOrNull<ChallengeGenreFilter>()
+        
+        val sortParam = sortFilter?.let { challengeSortList[it.state].value } ?: "VIEW"
+        val genreParam = genreFilter?.let { challengeGenreList[it.state].value } ?: ""
+        
+        val url = "$baseUrl/api/$mType/list".toHttpUrl().newBuilder().apply {
+            addQueryParameter("order", sortParam)
+            addQueryParameter("page", page.toString())
+            if (genreParam.isNotEmpty()) {
+                addQueryParameter("genre", genreParam)
+            }
+        }.build()
+        
+        return GET(url, headers)
+    }
+
+    override fun searchMangaParse(response: Response): MangasPage {
+        if (response.request.url.encodedPath.contains("/search/")) {
+            return super.searchMangaParse(response)
+        }
+        return popularMangaParse(response)
+    }
+
+    override fun getFilterList() = FilterList(
+        Filter.Header("키워드 검색 시 아래 필터는 무시됩니다."),
+        ChallengeSortFilter(),
+        ChallengeGenreFilter(),
+    )
+}

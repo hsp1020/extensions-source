@@ -6,8 +6,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 class ApiMangaSearchResponse(
-    private val pageInfo: PageInfo,
-    private val searchList: List<Manga>,
+    val pageInfo: PageInfo,
+    val searchList: List<Manga>,
 ) {
     val hasNextPage: Boolean get() = pageInfo.nextPage != 0
     fun toSMangas(mType: String): List<SManga> = searchList.map { it.toSManga(mType) }
@@ -59,7 +59,6 @@ class Manga(
     private val communityArtists: List<Author> = emptyList(),
     private val synopsis: String = "",
     private val author: String? = null,
-    // 👇 정렬 기능(별점, 조회수)을 위해 이 두 변수가 반드시 있어야 합니다!
     val starScore: Double = 0.0,
     val viewCount: Long = 0L,
 ) {

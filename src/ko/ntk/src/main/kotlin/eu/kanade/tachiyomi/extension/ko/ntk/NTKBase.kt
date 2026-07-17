@@ -93,7 +93,7 @@ abstract class NTKBase(
 
         val chapterUrl = request.url.toString()
         
-        // 미온 앱 화면 내부에서 정밀 로그를 즉시 감지하여 덤프하기 위한 동기화 바인더
+        // 실시간 디버그 로그 추적 바인더
         val debugLogs = java.util.Collections.synchronizedList(mutableListOf<String>())
         val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.KOREA)
         
@@ -106,17 +106,18 @@ abstract class NTKBase(
 
         log("=== [시작] Trojan WebView Interceptor ===")
         log("Chapter URL: $chapterUrl")
-        log("Root URL: $rootUrl")
 
         var finalHtml: String? = null
         val latch = CountDownLatch(1)
         val handler = Handler(Looper.getMainLooper())
+        var webViewInstance: WebView? = null
 
         handler.post {
             try {
                 val context = Injekt.get<Application>()
                 val webView = WebView(context)
-                log("WebView 인스턴스 생성 완료")
+                webViewInstance = webView
+                log("WebView 인스턴스 생성 성공 (직접 로딩 모드)")
 
                 webView.settings.javaScriptEnabled = true
                 webView.settings.domStorageEnabled = true
@@ -136,8 +137,8 @@ abstract class NTKBase(
                 cookieManager.setAcceptCookie(true)
                 cookieManager.setAcceptThirdPartyCookies(webView, true)
 
-                val currentCookies = cookieManager.getCookie(rootUrl)
-                log("현재 수집된 쿠키 ($rootUrl): $currentCookies")
+                val currentCookies = cookieManager.getCookie(chapterUrl)
+                log("현재 수집된 쿠키 ($chapterUrl): $currentCookies")
 
                 webView.addJavascriptInterface(
                     object {
@@ -177,29 +178,18 @@ abstract class NTKBase(
                     })();
                 """.trimIndent()
 
-                var preloadDone = false
-
                 webView.webViewClient = object : WebViewClient() {
                     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                        log("onPageStarted: $url (preloadDone: $preloadDone)")
-                        if (preloadDone) {
-                            log("페이지 주입 개시: $url")
-                            view.evaluateJavascript(wiretapScript) { result ->
-                                log("스크립트 주입 반환값: $result")
-                            }
+                        log("onPageStarted: $url")
+                        log("페이지 후킹 스크립트 주입 실행: $url")
+                        view.evaluateJavascript(wiretapScript) { result ->
+                            log("스크립트 주입 반환값: $result")
                         }
                         super.onPageStarted(view, url, favicon)
                     }
 
                     override fun onPageFinished(view: WebView, url: String) {
                         log("onPageFinished: $url")
-                        if (!preloadDone) {
-                            preloadDone = true
-                            log("홈 화면 로드 완료. 만화 본문 chapterUrl 로딩 시작: $chapterUrl")
-                            view.loadUrl(chapterUrl)
-                        } else {
-                            log("만화 본문 chapterUrl 로드 완료 상태 도달")
-                        }
                         super.onPageFinished(view, url)
                     }
 
@@ -237,8 +227,8 @@ abstract class NTKBase(
                     }
                 }
 
-                log("최초 홈 주소 로딩 개시: $rootUrl")
-                webView.loadUrl(rootUrl)
+                log("만화 본문 chapterUrl 직접 로딩 개시: $chapterUrl")
+                webView.loadUrl(chapterUrl)
 
             } catch (e: Exception) {
                 log("Handler 스레드 내부에서 심각한 예외 발생: ${e.message}")
@@ -254,6 +244,21 @@ abstract class NTKBase(
             log("=== [실패] 웹뷰 로딩 타임아웃 30초를 모두 초과했습니다. ===")
         }
 
+        // [핵심] 메모리 누수 및 백그라운드 리소스 중복 점유 방지를 위한 안전 소멸 처리
+        handler.post {
+            try {
+                webViewInstance?.let {
+                    it.stopLoading()
+                    it.clearHistory()
+                    it.removeAllViews()
+                    it.destroy()
+                    Log.d("NTK_DEBUG", "WebView 인스턴스 안전 소멸 완료 (누수 방지)")
+                }
+            } catch (e: Exception) {
+                Log.e("NTK_DEBUG", "WebView 인스턴스 소멸 중 예외 발생", e)
+            }
+        }
+
         finalHtml?.let {
             val isJson = it.trim().startsWith("{")
             val mediaType = if (isJson) "application/json" else "text/html"
@@ -267,7 +272,6 @@ abstract class NTKBase(
                 .build()
         }
 
-        // 미온 앱 에러 다이얼로그에 콘솔 로그를 즉각 노출시키기 위한 가공
         val logDump = debugLogs.joinToString("\n")
         log("finalHtml이 null이므로 오류 화면에 수집된 디버그 로그를 덤프합니다.")
 

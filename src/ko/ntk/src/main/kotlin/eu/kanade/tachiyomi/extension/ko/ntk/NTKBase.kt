@@ -531,11 +531,21 @@ abstract class NTKBase(
 
     override fun pageListParse(response: Response): List<Page> {
         val data = response.parseAs<PageImagesResponse>()
-        return data.images.mapIndexed { i, image ->
+        val pages = data.images.mapIndexed { i, image ->
             Page(i, imageUrl = image.src)
-        }
-    }
+        }.toMutableList()
 
+        // 미온 앱 SliderState 크래시(NegativeArraySizeException: -1) 예방용 우회 코드
+        // 로딩된 페이지 수가 2장 미만인 경우, 가상 더미 페이지를 붙여 강제로 최소 2장 이상으로 세팅합니다.
+        if (pages.size == 1) {
+            pages.add(Page(1, imageUrl = pages[0].imageUrl))
+        } else if (pages.isEmpty()) {
+            pages.add(Page(0, imageUrl = ""))
+            pages.add(Page(1, imageUrl = ""))
+        }
+        return pages
+    }
+    
     override fun imageUrlParse(response: Response) = throw UnsupportedOperationException()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {

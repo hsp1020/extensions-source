@@ -42,7 +42,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     override fun latestUpdatesParse(response: Response): MangasPage = parseWebtoonList(response)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // 1. 키워드 검색일 경우
         if (query.isNotEmpty()) {
             val url = "$baseUrl/api/search/$mType".toHttpUrl().newBuilder()
                 .addQueryParameter("keyword", query)
@@ -51,7 +50,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
             return GET(url, headers)
         }
 
-        // 2. 필터 검색일 경우
         val sortFilter = filters.firstInstanceOrNull<SortFilter>()
         val genreFilter = filters.firstInstanceOrNull<GenreFilter>()
         val dayFilter = filters.firstInstanceOrNull<DayFilter>()
@@ -72,22 +70,13 @@ class NaverWebtoon : NaverComicBase("webtoon") {
                 if (isStandardGenre) {
                     addPathSegments("api/webtoon/titlelist/genre")
                     addQueryParameter("genre", actualGenre)
-                    // 장르 탭 전용 별점순 파라미터 예외 처리
                     val finalSortParam = if (sortParam == "STAR_SCORE") "STAR" else sortParam
                     addQueryParameter("order", finalSortParam)
                     addQueryParameter("page", page.toString())
                 } else {
-                    // [해결] 세부 태그는 API가 아닌 SSR HTML 페이지를 직접 요청합니다.
-                    val htmlSortType = when (sortParam) {
-                        "USER" -> "user"
-                        "UPDATE" -> "update"
-                        "VIEW" -> "view"
-                        "STAR_SCORE", "STAR" -> "starscore"
-                        else -> "user"
-                    }
-                    addQueryParameter("tab", "genre")
-                    addQueryParameter("genre", actualGenre)
-                    addQueryParameter("sortType", htmlSortType)
+                    // 태그 검색은 네이버 순정 검색 API를 사용합니다.
+                    addPathSegments("api/search/webtoon")
+                    addQueryParameter("keyword", actualGenre)
                     addQueryParameter("page", page.toString())
                 }
             } else {
@@ -100,36 +89,63 @@ class NaverWebtoon : NaverComicBase("webtoon") {
             }
         }.build()
 
-        return GET(url, headers)
+        // 정렬 파라미터는 앱 내부 로컬 정렬을 위해 헤더에 숨겨 보냅니다.
+        val reqHeaders = headers.newBuilder()
+            .add("X-Sort-Param", sortParam)
+            .add("X-Is-Tag-Search", if (!isStandardGenre && actualGenre.isNotEmpty() && dayParam.isEmpty()) "true" else "false")
+            .build()
+
+        return GET(url, reqHeaders)
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
         val bodyString = response.body.string()
-
-        // [해결] 세부 태그(#먼치킨 등) 요청 시 HTML 응답을 직접 파싱합니다.
-        // 제공해주신 소스코드 구조를 100% 반영하여 CSS 모듈 해시값 변경에도 대응하도록 안정성을 높였습니다.
-        if (bodyString.trimStart().startsWith("<!DOCTYPE html>", ignoreCase = true) || bodyString.trimStart().startsWith("<html", ignoreCase = true)) {
-            val document = org.jsoup.Jsoup.parse(bodyString)
-            val mangas = document.select("ul[class*=ContentList] > li[class*=item]").map { element ->
-                SManga.create().apply {
-                    url = element.selectFirst("a[class*=Poster__link]")?.attr("href") ?: ""
-                    title = element.select("span[class*=ContentTitle__title] span.text")?.text()?.ifEmpty {
-                        element.select("span[class*=ContentTitle__title]").text()
-                    } ?: ""
-                    thumbnail_url = element.select("img[class*=Poster__image]")?.attr("src") ?: element.select("img")?.attr("src")
-                    author = element.select("[class*=ContentAuthor__author]")?.text() ?: ""
-                }
-            }
-            val hasNextPage = mangas.size >= 25 || document.selectFirst("[class*=Paginate__next]:not([disabled])") != null
-            return MangasPage(mangas, hasNextPage)
-        }
-
         val jsonObject = json.parseToJsonElement(bodyString).jsonObject
 
-        // 일반 키워드 검색 응답
         if (jsonObject.containsKey("searchList")) {
             val result = json.decodeFromJsonElement<ApiMangaSearchResponse>(jsonObject)
-            return MangasPage(result.toSMangas(mType), result.hasNextPage)
+            val mangas = result.searchList
+            val hasNextPage = result.hasNextPage
+            
+            val sortParam = response.request.header("X-Sort-Param")
+            val isTagSearch = response.request.header("X-Is-Tag-Search") == "true"
+            
+            // [특수 로직] 태그 검색 시, 전체 페이지를 백그라운드로 로드하여 타치요미가 별점순/조회순 정렬
+            if (isTagSearch && sortParam != null && sortParam != "USER") {
+                val allMangas = mutableListOf<Manga>()
+                allMangas.addAll(mangas)
+                
+                var currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
+                var next = hasNextPage
+                
+                // 앱 뻗음 방지를 위해 최대 50페이지 제한
+                while (next && currentPage < 50) {
+                    currentPage++
+                    val nextUrl = response.request.url.newBuilder().setQueryParameter("page", currentPage.toString()).build()
+                    val nextReq = GET(nextUrl, response.request.headers)
+                    val nextRes = client.newCall(nextReq).execute()
+                    val nextJson = json.parseToJsonElement(nextRes.body.string()).jsonObject
+                    
+                    if (nextJson.containsKey("searchList")) {
+                        val nextResult = json.decodeFromJsonElement<ApiMangaSearchResponse>(nextJson)
+                        allMangas.addAll(nextResult.searchList)
+                        next = nextResult.hasNextPage
+                    } else {
+                        break
+                    }
+                }
+                
+                // [해결] 별점순 뿐만 아니라 조회순(VIEW)도 앱 내부에서 완벽하게 줄세우기
+                val sortedMangas = when (sortParam) {
+                    "STAR_SCORE", "STAR" -> allMangas.sortedByDescending { it.starScore }
+                    "VIEW" -> allMangas.sortedByDescending { it.viewCount }
+                    else -> allMangas 
+                }
+                
+                return MangasPage(sortedMangas.map { it.toSManga(mType) }.distinctBy { it.url }, false)
+            }
+            
+            return MangasPage(mangas.map { it.toSManga(mType) }.distinctBy { it.url }, hasNextPage)
         }
 
         return parseWebtoonListJson(response, jsonObject)
@@ -211,14 +227,9 @@ internal val genreList = listOf(
     FilterOption("드라마", "DRAMA"),
     FilterOption("감성", "SENSIBILITY"),
     FilterOption("스포츠", "SPORTS"),
-    
-    // [해결] 연도별웹툰/브랜드웹툰 대분류 영어 코드로 매핑
-    FilterOption("연도별웹툰", "PERIOD"),
+    FilterOption("연도별웹툰", "PERIOD"), 
     FilterOption("브랜드웹툰", "BRAND"),   
-    
-    // [해결] 대분류 드라마(DRAMA)와 구분하기 위해 세부 태그는 (태그) 명시
-    FilterOption("드라마 (태그)", "드라마 (태그)"),
-    
+    FilterOption("드라마 (태그)", "드라마 (태그)"), 
     FilterOption("드라마&영화 원작웹툰", "드라마&영화 원작웹툰"),
     FilterOption("먼치킨", "먼치킨"),
     FilterOption("학원로맨스", "학원로맨스"),
@@ -510,7 +521,7 @@ class DayFilter : Filter.Select<String>("요일 / 완결", dayList.map { it.name
 internal val challengeSortList = listOf(
     FilterOption("조회순", "VIEW"),
     FilterOption("업데이트순", "UPDATE"),
-    FilterOption("별점순", "STAR_SCORE"), // [해결] 베도/도전만화 서버 규칙에 맞춘 대문자 복구 완료
+    FilterOption("별점순", "STAR"), 
 )
 
 internal val challengeGenreList = listOf(
@@ -558,22 +569,63 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
         val sortParam = sortFilter?.let { challengeSortList[it.state].value } ?: "VIEW"
         val genreParam = genreFilter?.let { challengeGenreList[it.state].value } ?: ""
         
+        // [해결] 서버의 500 에러를 피하기 위해 무조건 VIEW 로 속여서 호출합니다.
+        val apiOrder = if (sortParam == "STAR" || sortParam == "VIEW") "VIEW" else sortParam
+
         val url = "$baseUrl/api/$mType/list".toHttpUrl().newBuilder().apply {
-            addQueryParameter("order", sortParam)
+            addQueryParameter("order", apiOrder)
             addQueryParameter("page", page.toString())
             if (genreParam.isNotEmpty()) {
                 addQueryParameter("genre", genreParam)
             }
         }.build()
         
-        return GET(url, headers)
+        // 타치요미 내부 로컬 정렬을 위해 헤더에 실제 사용자가 선택한 정렬값 숨기기
+        val reqHeaders = headers.newBuilder()
+            .add("X-Sort-Param", sortParam)
+            .build()
+            
+        return GET(url, reqHeaders)
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
         if (response.request.url.encodedPath.contains("/search/")) {
             return super.searchMangaParse(response)
         }
-        return popularMangaParse(response)
+        
+        val bodyString = response.body.string()
+        val jsonObject = json.parseToJsonElement(bodyString).jsonObject
+        val result = json.decodeFromJsonElement<ApiMangaChallengeResponse>(jsonObject)
+        
+        val sortParam = response.request.header("X-Sort-Param")
+        
+        // [특수 로직] 별점순(STAR)일 경우 500 에러 우회를 위해 타치요미 앱 내부에서 백그라운드로 긁어와 직접 정렬
+        if (sortParam == "STAR") {
+            val allMangas = mutableListOf<MangaChallenge>()
+            allMangas.addAll(result.list)
+            
+            var currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
+            var next = result.pageInfo?.nextPage != null && result.pageInfo.nextPage != 0
+            
+            // 앱 뻗음 방지를 위해 최대 50페이지(약 1,500개)까지만 로드하여 정렬
+            while (next && currentPage < 50) {
+                currentPage++
+                val nextUrl = response.request.url.newBuilder().setQueryParameter("page", currentPage.toString()).build()
+                val nextReq = GET(nextUrl, response.request.headers)
+                val nextRes = client.newCall(nextReq).execute()
+                val nextJson = json.parseToJsonElement(nextRes.body.string()).jsonObject
+                
+                val nextResult = json.decodeFromJsonElement<ApiMangaChallengeResponse>(nextJson)
+                allMangas.addAll(nextResult.list)
+                next = nextResult.pageInfo?.nextPage != null && nextResult.pageInfo.nextPage != 0
+            }
+            
+            // [해결] 베도/도전만화 앱 내부 별점순 완벽 줄세우기
+            val sortedMangas = allMangas.sortedByDescending { it.starScore }
+            return MangasPage(sortedMangas.map { it.toSManga(mType) }.distinctBy { it.url }, false)
+        }
+        
+        return MangasPage(result.toSMangas(mType), result.pageInfo?.nextPage != null && result.pageInfo.nextPage != 0)
     }
 
     override fun getFilterList() = FilterList(
@@ -608,22 +660,58 @@ class NaverChallenge : NaverComicChallengeBase("challenge") {
         val sortParam = sortFilter?.let { challengeSortList[it.state].value } ?: "VIEW"
         val genreParam = genreFilter?.let { challengeGenreList[it.state].value } ?: ""
         
+        val apiOrder = if (sortParam == "STAR" || sortParam == "VIEW") "VIEW" else sortParam
+
         val url = "$baseUrl/api/$mType/list".toHttpUrl().newBuilder().apply {
-            addQueryParameter("order", sortParam)
+            addQueryParameter("order", apiOrder)
             addQueryParameter("page", page.toString())
             if (genreParam.isNotEmpty()) {
                 addQueryParameter("genre", genreParam)
             }
         }.build()
         
-        return GET(url, headers)
+        val reqHeaders = headers.newBuilder()
+            .add("X-Sort-Param", sortParam)
+            .build()
+            
+        return GET(url, reqHeaders)
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
         if (response.request.url.encodedPath.contains("/search/")) {
             return super.searchMangaParse(response)
         }
-        return popularMangaParse(response)
+        
+        val bodyString = response.body.string()
+        val jsonObject = json.parseToJsonElement(bodyString).jsonObject
+        val result = json.decodeFromJsonElement<ApiMangaChallengeResponse>(jsonObject)
+        
+        val sortParam = response.request.header("X-Sort-Param")
+        
+        if (sortParam == "STAR") {
+            val allMangas = mutableListOf<MangaChallenge>()
+            allMangas.addAll(result.list)
+            
+            var currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
+            var next = result.pageInfo?.nextPage != null && result.pageInfo.nextPage != 0
+            
+            while (next && currentPage < 50) {
+                currentPage++
+                val nextUrl = response.request.url.newBuilder().setQueryParameter("page", currentPage.toString()).build()
+                val nextReq = GET(nextUrl, response.request.headers)
+                val nextRes = client.newCall(nextReq).execute()
+                val nextJson = json.parseToJsonElement(nextRes.body.string()).jsonObject
+                
+                val nextResult = json.decodeFromJsonElement<ApiMangaChallengeResponse>(nextJson)
+                allMangas.addAll(nextResult.list)
+                next = nextResult.pageInfo?.nextPage != null && nextResult.pageInfo.nextPage != 0
+            }
+            
+            val sortedMangas = allMangas.sortedByDescending { it.starScore }
+            return MangasPage(sortedMangas.map { it.toSManga(mType) }.distinctBy { it.url }, false)
+        }
+        
+        return MangasPage(result.toSMangas(mType), result.pageInfo?.nextPage != null && result.pageInfo.nextPage != 0)
     }
 
     override fun getFilterList() = FilterList(

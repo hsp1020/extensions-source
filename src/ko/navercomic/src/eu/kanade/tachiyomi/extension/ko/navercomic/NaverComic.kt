@@ -106,8 +106,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         if (jsonObject.containsKey("titleList")) {
             allMangas.addAll(json.decodeFromJsonElement<List<Manga>>(jsonObject["titleList"]!!))
             
-            // [해결] 봇 탐지를 유발하는 모든 백그라운드 강제 로드(while, async) 로직을 삭제했습니다.
-            // 대신 이중 통신 버그가 제거되었으므로, 스크롤 시 1페이지씩 빠르고 안전하게 로드됩니다.
             val pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
             val hasNextPage = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
             
@@ -231,7 +229,6 @@ class ChallengeGenreFilter : Filter.Select<String>("장르", challengeGenreList.
 // ==========================================
 class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
     override val name = "Naver Webtoon Best Challenge"
-
     private val json = Json { ignoreUnknownKeys = true }
 
     override fun popularMangaRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=VIEW&page=$page", headers)
@@ -263,19 +260,7 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
         return GET(url, headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val bodyString = response.body.string()
-        val jsonObject = json.parseToJsonElement(bodyString).jsonObject
-        val result = json.decodeFromJsonElement<ApiMangaChallengeResponse>(jsonObject)
-        
-        val mangas = result.toSMangas(mType)
-        val hasNextPage = mangas.size >= 30
-        
-        return MangasPage(mangas, hasNextPage)
-    }
-
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
+    // [수정] 베이스 클래스에서 렉 제거 로직을 처리하므로, 중복되던 오버라이딩 코드를 깔끔하게 삭제했습니다.
     override fun searchMangaParse(response: Response): MangasPage {
         if (response.request.url.encodedPath.contains("/search/")) {
             val bodyString = response.body.string()
@@ -299,7 +284,6 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
 class NaverChallenge : NaverComicChallengeBase("challenge") {
     override val name = "Naver Webtoon Challenge"
     override val dateFormat = SimpleDateFormat("yyyy.MM.dd", Locale.KOREA)
-    
     private val json = Json { ignoreUnknownKeys = true }
 
     override fun popularMangaRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=VIEW&page=$page", headers)
@@ -331,19 +315,7 @@ class NaverChallenge : NaverComicChallengeBase("challenge") {
         return GET(url, headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val bodyString = response.body.string()
-        val jsonObject = json.parseToJsonElement(bodyString).jsonObject
-        val result = json.decodeFromJsonElement<ApiMangaChallengeResponse>(jsonObject)
-        
-        val mangas = result.toSMangas(mType)
-        val hasNextPage = mangas.size >= 30
-        
-        return MangasPage(mangas, hasNextPage)
-    }
-
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
+    // [수정] 베이스 클래스에서 렉 제거 로직을 처리하므로, 중복되던 오버라이딩 코드를 깔끔하게 삭제했습니다.
     override fun searchMangaParse(response: Response): MangasPage {
         if (response.request.url.encodedPath.contains("/search/")) {
             val bodyString = response.body.string()

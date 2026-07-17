@@ -6,10 +6,15 @@ import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SManga
 import keiyoushi.utils.firstInstanceOrNull
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.text.SimpleDateFormat
@@ -105,6 +110,32 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         
         if (jsonObject.containsKey("titleList")) {
             allMangas.addAll(json.decodeFromJsonElement<List<Manga>>(jsonObject["titleList"]!!))
+            
+            var pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
+            var next = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
+            var currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
+            
+            if (currentPage == 1 && next) {
+                while (next && currentPage < 20) { 
+                    currentPage++
+                    val nextUrl = response.request.url.newBuilder().setQueryParameter("page", currentPage.toString()).build()
+                    val nextReq = GET(nextUrl, response.request.headers)
+                    val nextRes = client.newCall(nextReq).execute()
+                    val nextJson = json.parseToJsonElement(nextRes.body.string()).jsonObject
+                    
+                    if (nextJson.containsKey("titleList")) {
+                        allMangas.addAll(json.decodeFromJsonElement<List<Manga>>(nextJson["titleList"]!!))
+                        pageInfo = nextJson["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
+                        next = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
+                    } else {
+                        break
+                    }
+                }
+            }
+            
+            val mangas = allMangas.map { it.toSManga(mType) }.distinctBy { it.url }
+            return MangasPage(mangas, if (currentPage == 1) false else next)
+            
         } else if (jsonObject.containsKey("titleListMap")) {
             val map = json.decodeFromJsonElement<Map<String, List<Manga>>>(jsonObject["titleListMap"]!!)
             val sortParam = response.request.url.queryParameter("order") ?: "USER"
@@ -128,14 +159,12 @@ class NaverWebtoon : NaverComicBase("webtoon") {
                     }
                 }
             }
+            
+            val mangas = allMangas.map { it.toSManga(mType) }.distinctBy { it.url }
+            return MangasPage(mangas, false)
         }
 
-        val mangas = allMangas.map { it.toSManga(mType) }.distinctBy { it.url }
-
-        val pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
-        val hasNextPage = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
-
-        return MangasPage(mangas, hasNextPage)
+        return MangasPage(emptyList(), false)
     }
 
     override fun getFilterList() = FilterList(
@@ -170,8 +199,6 @@ internal val genreList = listOf(
     FilterOption("드라마", "DRAMA"),
     FilterOption("감성", "SENSIBILITY"),
     FilterOption("스포츠", "SPORTS"),
-    FilterOption("연도별웹툰", "PERIOD"), 
-    FilterOption("브랜드웹툰", "BRAND"),   
 )
 
 internal val dayList = listOf(
@@ -222,21 +249,130 @@ class ChallengeGenreFilter : Filter.Select<String>("장르", challengeGenreList.
 
 
 // ==========================================
+// 공통 병렬 처리 로직 (베도/도전만화 쾌적화)
+// ==========================================
+internal fun parseChallengeBatch(
+    response: Response,
+    json: Json,
+    mType: String,
+    client: OkHttpClient,
+    batchSize: Int
+): MangasPage {
+    val bodyString = response.body.string()
+    val allMangas = mutableListOf<SManga>()
+    var hasNext = false
+
+    if (response.request.url.encodedPath.contains("/search/")) {
+        val jsonObject = json.parseToJsonElement(bodyString).jsonObject
+        val result = json.decodeFromJsonElement<ApiMangaSearchResponse>(jsonObject)
+        allMangas.addAll(result.toSMangas(mType))
+        hasNext = result.hasNextPage
+
+        if (hasNext) {
+            val startApiPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
+            val pagesToFetch = (startApiPage + 1 until startApiPage + batchSize).toList()
+
+            val fetched = runBlocking(Dispatchers.IO) {
+                pagesToFetch.map { p ->
+                    async {
+                        val nextUrl = response.request.url.newBuilder().setQueryParameter("page", p.toString()).build()
+                        val nextReq = GET(nextUrl, response.request.headers)
+                        try {
+                            val nextRes = client.newCall(nextReq).execute()
+                            val nextJson = json.parseToJsonElement(nextRes.body.string()).jsonObject
+                            val nextResult = json.decodeFromJsonElement<ApiMangaSearchResponse>(nextJson)
+                            Pair(nextResult.toSMangas(mType), nextResult.hasNextPage)
+                        } catch (e: Exception) {
+                            Pair(emptyList<SManga>(), false)
+                        }
+                    }
+                }.awaitAll()
+            }
+
+            for (pair in fetched) {
+                allMangas.addAll(pair.first)
+                hasNext = pair.second
+                if (!hasNext) break
+            }
+        }
+    } else {
+        val jsonObject = json.parseToJsonElement(bodyString).jsonObject
+        val result = json.decodeFromJsonElement<ApiMangaChallengeResponse>(jsonObject)
+        
+        val initialMangas = result.toSMangas(mType)
+        allMangas.addAll(initialMangas)
+        
+        hasNext = if (result.pageInfo != null) {
+            result.pageInfo.nextPage != 0
+        } else {
+            initialMangas.size >= 30
+        }
+
+        if (hasNext) {
+            val startApiPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
+            val pagesToFetch = (startApiPage + 1 until startApiPage + batchSize).toList()
+
+            val fetched = runBlocking(Dispatchers.IO) {
+                pagesToFetch.map { p ->
+                    async {
+                        val nextUrl = response.request.url.newBuilder().setQueryParameter("page", p.toString()).build()
+                        val nextReq = GET(nextUrl, response.request.headers)
+                        try {
+                            val nextRes = client.newCall(nextReq).execute()
+                            val nextJson = json.parseToJsonElement(nextRes.body.string()).jsonObject
+                            val nextResult = json.decodeFromJsonElement<ApiMangaChallengeResponse>(nextJson)
+                            
+                            val nextMangas = nextResult.toSMangas(mType)
+                            val nextHas = if (nextResult.pageInfo != null) {
+                                nextResult.pageInfo.nextPage != 0
+                            } else {
+                                nextMangas.size >= 30
+                            }
+                            Pair(nextMangas, nextHas)
+                        } catch (e: Exception) {
+                            Pair(emptyList<SManga>(), false)
+                        }
+                    }
+                }.awaitAll()
+            }
+
+            for (pair in fetched) {
+                allMangas.addAll(pair.first)
+                hasNext = pair.second
+                if (!hasNext) break
+            }
+        }
+    }
+
+    return MangasPage(allMangas.distinctBy { it.url }, hasNext)
+}
+
+
+// ==========================================
 // 2. 베스트도전 클래스
 // ==========================================
 class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
     override val name = "Naver Webtoon Best Challenge"
-
     private val json = Json { ignoreUnknownKeys = true }
+    private val BATCH_SIZE = 4 // 1번 스크롤 시 4페이지(120개)를 동시에 로드하여 렉 최소화
 
-    override fun popularMangaRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=VIEW&page=$page", headers)
-    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=UPDATE&page=$page", headers)
+    override fun popularMangaRequest(page: Int): Request {
+        val apiPage = (page - 1) * BATCH_SIZE + 1
+        return GET("$baseUrl/api/$mType/list?order=VIEW&page=$apiPage", headers)
+    }
+
+    override fun latestUpdatesRequest(page: Int): Request {
+        val apiPage = (page - 1) * BATCH_SIZE + 1
+        return GET("$baseUrl/api/$mType/list?order=UPDATE&page=$apiPage", headers)
+    }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        val apiPage = (page - 1) * BATCH_SIZE + 1
+        
         if (query.isNotEmpty()) {
             val url = "$baseUrl/api/search/$mType".toHttpUrl().newBuilder()
                 .addQueryParameter("keyword", query)
-                .addQueryParameter("page", page.toString())
+                .addQueryParameter("page", apiPage.toString())
                 .build()
             return GET(url, headers)
         }
@@ -249,7 +385,7 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
         
         val url = "$baseUrl/api/$mType/list".toHttpUrl().newBuilder().apply {
             addQueryParameter("order", sortParam)
-            addQueryParameter("page", page.toString())
+            addQueryParameter("page", apiPage.toString())
             if (genreParam.isNotEmpty()) {
                 addQueryParameter("genre", genreParam)
             }
@@ -258,12 +394,10 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        if (response.request.url.encodedPath.contains("/search/")) {
-            return super.searchMangaParse(response)
-        }
-        return popularMangaParse(response)
-    }
+    // 병렬 파싱 로직 적용
+    override fun popularMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
+    override fun latestUpdatesParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
+    override fun searchMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
 
     override fun getFilterList() = FilterList(
         Filter.Header("키워드 검색 시 아래 필터는 무시됩니다."),
@@ -280,15 +414,25 @@ class NaverChallenge : NaverComicChallengeBase("challenge") {
     override val dateFormat = SimpleDateFormat("yyyy.MM.dd", Locale.KOREA)
     
     private val json = Json { ignoreUnknownKeys = true }
+    private val BATCH_SIZE = 4 // 1번 스크롤 시 4페이지(120개)를 동시에 로드하여 렉 최소화
 
-    override fun popularMangaRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=VIEW&page=$page", headers)
-    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=UPDATE&page=$page", headers)
+    override fun popularMangaRequest(page: Int): Request {
+        val apiPage = (page - 1) * BATCH_SIZE + 1
+        return GET("$baseUrl/api/$mType/list?order=VIEW&page=$apiPage", headers)
+    }
+
+    override fun latestUpdatesRequest(page: Int): Request {
+        val apiPage = (page - 1) * BATCH_SIZE + 1
+        return GET("$baseUrl/api/$mType/list?order=UPDATE&page=$apiPage", headers)
+    }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        val apiPage = (page - 1) * BATCH_SIZE + 1
+        
         if (query.isNotEmpty()) {
             val url = "$baseUrl/api/search/$mType".toHttpUrl().newBuilder()
                 .addQueryParameter("keyword", query)
-                .addQueryParameter("page", page.toString())
+                .addQueryParameter("page", apiPage.toString())
                 .build()
             return GET(url, headers)
         }
@@ -301,7 +445,7 @@ class NaverChallenge : NaverComicChallengeBase("challenge") {
         
         val url = "$baseUrl/api/$mType/list".toHttpUrl().newBuilder().apply {
             addQueryParameter("order", sortParam)
-            addQueryParameter("page", page.toString())
+            addQueryParameter("page", apiPage.toString())
             if (genreParam.isNotEmpty()) {
                 addQueryParameter("genre", genreParam)
             }
@@ -310,12 +454,10 @@ class NaverChallenge : NaverComicChallengeBase("challenge") {
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        if (response.request.url.encodedPath.contains("/search/")) {
-            return super.searchMangaParse(response)
-        }
-        return popularMangaParse(response)
-    }
+    // 병렬 파싱 로직 적용
+    override fun popularMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
+    override fun latestUpdatesParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
+    override fun searchMangaParse(response: Response) = parseChallengeBatch(response, json, mType, client, BATCH_SIZE)
 
     override fun getFilterList() = FilterList(
         Filter.Header("키워드 검색 시 아래 필터는 무시됩니다."),

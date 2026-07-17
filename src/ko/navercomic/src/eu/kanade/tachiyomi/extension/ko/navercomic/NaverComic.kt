@@ -42,6 +42,7 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     override fun latestUpdatesParse(response: Response): MangasPage = parseWebtoonList(response)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        // 1. 키워드 검색일 경우
         if (query.isNotEmpty()) {
             val url = "$baseUrl/api/search/$mType".toHttpUrl().newBuilder()
                 .addQueryParameter("keyword", query)
@@ -50,6 +51,7 @@ class NaverWebtoon : NaverComicBase("webtoon") {
             return GET(url, headers)
         }
 
+        // 2. 필터 검색일 경우
         val sortFilter = filters.firstInstanceOrNull<SortFilter>()
         val genreFilter = filters.firstInstanceOrNull<GenreFilter>()
         val dayFilter = filters.firstInstanceOrNull<DayFilter>()
@@ -58,26 +60,34 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val genreParam = genreFilter?.let { genreList[it.state].value } ?: ""
         val dayParam = dayFilter?.let { dayList[it.state].value } ?: ""
 
-        // PERIOD(연도별), BRAND(브랜드) 포함
-        val isStandardGenre = listOf("DAILY", "COMIC", "FANTASY", "ACTION", "DRAMA", "PURE", "SENSIBILITY", "THRILL", "HISTORICAL", "SPORTS", "PERIOD", "BRAND").contains(genreParam)
+        val actualGenre = if (genreParam == "드라마 (태그)") "드라마" else genreParam
+        val isStandardGenre = listOf("DAILY", "COMIC", "FANTASY", "ACTION", "DRAMA", "PURE", "SENSIBILITY", "THRILL", "HISTORICAL", "SPORTS", "PERIOD", "BRAND").contains(actualGenre)
 
         val url = baseUrl.toHttpUrl().newBuilder().apply {
             if (dayParam == "finished") {
                 addPathSegments("api/webtoon/titlelist/finished")
                 addQueryParameter("order", sortParam)
                 addQueryParameter("page", page.toString())
-            } else if (genreParam.isNotEmpty() && dayParam.isEmpty()) {
+            } else if (actualGenre.isNotEmpty() && dayParam.isEmpty()) {
                 if (isStandardGenre) {
                     addPathSegments("api/webtoon/titlelist/genre")
-                    addQueryParameter("genre", genreParam)
+                    addQueryParameter("genre", actualGenre)
+                    // 장르 탭 전용 별점순 파라미터 예외 처리
                     val finalSortParam = if (sortParam == "STAR_SCORE") "STAR" else sortParam
                     addQueryParameter("order", finalSortParam)
                     addQueryParameter("page", page.toString())
                 } else {
-                    // [임시 복구] 500 에러를 막기 위해 한글 태그는 다시 검색 API로 우회합니다.
-                    // 정렬 기능 완벽 구현을 위해 웹페이지 소스코드를 주시면 진짜 태그 API를 찾아 적용하겠습니다.
-                    addPathSegments("api/search/webtoon")
-                    addQueryParameter("keyword", genreParam)
+                    // [해결] 세부 태그는 API가 아닌 SSR HTML 페이지를 직접 요청합니다.
+                    val htmlSortType = when (sortParam) {
+                        "USER" -> "user"
+                        "UPDATE" -> "update"
+                        "VIEW" -> "view"
+                        "STAR_SCORE", "STAR" -> "starscore"
+                        else -> "user"
+                    }
+                    addQueryParameter("tab", "genre")
+                    addQueryParameter("genre", actualGenre)
+                    addQueryParameter("sortType", htmlSortType)
                     addQueryParameter("page", page.toString())
                 }
             } else {
@@ -94,10 +104,29 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
-        val jsonString = response.body.string()
-        val jsonObject = json.parseToJsonElement(jsonString).jsonObject
+        val bodyString = response.body.string()
 
-        // 검색 API 응답 처리
+        // [해결] 세부 태그(#먼치킨 등) 요청 시 HTML 응답을 직접 파싱합니다.
+        // 제공해주신 소스코드 구조를 100% 반영하여 CSS 모듈 해시값 변경에도 대응하도록 안정성을 높였습니다.
+        if (bodyString.trimStart().startsWith("<!DOCTYPE html>", ignoreCase = true) || bodyString.trimStart().startsWith("<html", ignoreCase = true)) {
+            val document = org.jsoup.Jsoup.parse(bodyString)
+            val mangas = document.select("ul[class*=ContentList] > li[class*=item]").map { element ->
+                SManga.create().apply {
+                    url = element.selectFirst("a[class*=Poster__link]")?.attr("href") ?: ""
+                    title = element.select("span[class*=ContentTitle__title] span.text")?.text()?.ifEmpty {
+                        element.select("span[class*=ContentTitle__title]").text()
+                    } ?: ""
+                    thumbnail_url = element.select("img[class*=Poster__image]")?.attr("src") ?: element.select("img")?.attr("src")
+                    author = element.select("[class*=ContentAuthor__author]")?.text() ?: ""
+                }
+            }
+            val hasNextPage = mangas.size >= 25 || document.selectFirst("[class*=Paginate__next]:not([disabled])") != null
+            return MangasPage(mangas, hasNextPage)
+        }
+
+        val jsonObject = json.parseToJsonElement(bodyString).jsonObject
+
+        // 일반 키워드 검색 응답
         if (jsonObject.containsKey("searchList")) {
             val result = json.decodeFromJsonElement<ApiMangaSearchResponse>(jsonObject)
             return MangasPage(result.toSMangas(mType), result.hasNextPage)
@@ -182,9 +211,14 @@ internal val genreList = listOf(
     FilterOption("드라마", "DRAMA"),
     FilterOption("감성", "SENSIBILITY"),
     FilterOption("스포츠", "SPORTS"),
-    FilterOption("연도별웹툰", "PERIOD"), // [지시사항 반영] 대분류 코드로 매핑
-    FilterOption("브랜드웹툰", "BRAND"),   // [지시사항 반영] 대분류 코드로 매핑
-    FilterOption("드라마 (태그)", "드라마"), // [지시사항 반영] 명칭 구분
+    
+    // [해결] 연도별웹툰/브랜드웹툰 대분류 영어 코드로 매핑
+    FilterOption("연도별웹툰", "PERIOD"),
+    FilterOption("브랜드웹툰", "BRAND"),   
+    
+    // [해결] 대분류 드라마(DRAMA)와 구분하기 위해 세부 태그는 (태그) 명시
+    FilterOption("드라마 (태그)", "드라마 (태그)"),
+    
     FilterOption("드라마&영화 원작웹툰", "드라마&영화 원작웹툰"),
     FilterOption("먼치킨", "먼치킨"),
     FilterOption("학원로맨스", "학원로맨스"),
@@ -476,7 +510,7 @@ class DayFilter : Filter.Select<String>("요일 / 완결", dayList.map { it.name
 internal val challengeSortList = listOf(
     FilterOption("조회순", "VIEW"),
     FilterOption("업데이트순", "UPDATE"),
-    FilterOption("별점순", "starScore"), 
+    FilterOption("별점순", "STAR_SCORE"), // [해결] 베도/도전만화 서버 규칙에 맞춘 대문자 복구 완료
 )
 
 internal val challengeGenreList = listOf(

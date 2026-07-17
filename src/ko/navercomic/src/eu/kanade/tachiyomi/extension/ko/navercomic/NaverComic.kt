@@ -66,6 +66,7 @@ class NaverWebtoon : NaverComicBase("webtoon") {
             } else if (genreParam.isNotEmpty() && dayParam.isEmpty()) {
                 addPathSegments("api/webtoon/titlelist/genre")
                 addQueryParameter("genre", genreParam)
+                // 장르 탭 전용 별점순 파라미터 예외 처리
                 val finalSortParam = if (sortParam == "STAR_SCORE") "STAR" else sortParam
                 addQueryParameter("order", finalSortParam)
                 addQueryParameter("page", page.toString())
@@ -86,6 +87,7 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val bodyString = response.body.string()
         val jsonObject = json.parseToJsonElement(bodyString).jsonObject
 
+        // 키워드 검색 응답 처리
         if (jsonObject.containsKey("searchList")) {
             val result = json.decodeFromJsonElement<ApiMangaSearchResponse>(jsonObject)
             return MangasPage(result.toSMangas(mType), result.hasNextPage)
@@ -106,30 +108,12 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         if (jsonObject.containsKey("titleList")) {
             allMangas.addAll(json.decodeFromJsonElement<List<Manga>>(jsonObject["titleList"]!!))
             
-            var pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
-            var next = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
-            var currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
-            
-            if (currentPage == 1 && next) {
-                while (next && currentPage < 20) { 
-                    currentPage++
-                    val nextUrl = response.request.url.newBuilder().setQueryParameter("page", currentPage.toString()).build()
-                    val nextReq = GET(nextUrl, response.request.headers)
-                    val nextRes = client.newCall(nextReq).execute()
-                    val nextJson = json.parseToJsonElement(nextRes.body.string()).jsonObject
-                    
-                    if (nextJson.containsKey("titleList")) {
-                        allMangas.addAll(json.decodeFromJsonElement<List<Manga>>(nextJson["titleList"]!!))
-                        pageInfo = nextJson["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
-                        next = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
-                    } else {
-                        break
-                    }
-                }
-            }
+            val pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
+            val next = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
             
             val mangas = allMangas.map { it.toSManga(mType) }.distinctBy { it.url }
-            return MangasPage(mangas, if (currentPage == 1) false else next)
+            // [핵심 해결] 네이버 차단을 유발하던 while 강제 로드 로직을 삭제하고 순정 페이징으로 복구
+            return MangasPage(mangas, next)
             
         } else if (jsonObject.containsKey("titleListMap")) {
             val map = json.decodeFromJsonElement<Map<String, List<Manga>>>(jsonObject["titleListMap"]!!)
@@ -280,14 +264,13 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
         return GET(url, headers)
     }
 
-    // [핵심 해결] 이중 통신 병목을 제거하기 위해 Base 클래스의 느린 파싱 로직을 덮어쓰기
+    // 통신 1회 삭제 (속도 2배 향상 로직 유지)
     override fun popularMangaParse(response: Response): MangasPage {
         val bodyString = response.body.string()
         val jsonObject = json.parseToJsonElement(bodyString).jsonObject
         val result = json.decodeFromJsonElement<ApiMangaChallengeResponse>(jsonObject)
         
         val mangas = result.toSMangas(mType)
-        // 불필요한 pageInfo 재요청 API를 날려버리고, 30개면 다음 페이지가 있다고 판단
         val hasNextPage = mangas.size >= 30
         
         return MangasPage(mangas, hasNextPage)
@@ -350,14 +333,13 @@ class NaverChallenge : NaverComicChallengeBase("challenge") {
         return GET(url, headers)
     }
 
-    // [핵심 해결] 이중 통신 병목을 제거하기 위해 Base 클래스의 느린 파싱 로직을 덮어쓰기
+    // 통신 1회 삭제 (속도 2배 향상 로직 유지)
     override fun popularMangaParse(response: Response): MangasPage {
         val bodyString = response.body.string()
         val jsonObject = json.parseToJsonElement(bodyString).jsonObject
         val result = json.decodeFromJsonElement<ApiMangaChallengeResponse>(jsonObject)
         
         val mangas = result.toSMangas(mType)
-        // 불필요한 pageInfo 재요청 API를 날려버리고, 30개면 다음 페이지가 있다고 판단
         val hasNextPage = mangas.size >= 30
         
         return MangasPage(mangas, hasNextPage)

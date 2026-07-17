@@ -74,7 +74,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
                     addQueryParameter("order", finalSortParam)
                     addQueryParameter("page", page.toString())
                 } else {
-                    // 태그 검색은 네이버 순정 검색 API를 사용합니다.
                     addPathSegments("api/search/webtoon")
                     addQueryParameter("keyword", actualGenre)
                     addQueryParameter("page", page.toString())
@@ -89,7 +88,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
             }
         }.build()
 
-        // 정렬 파라미터는 앱 내부 로컬 정렬을 위해 헤더에 숨겨 보냅니다.
         val reqHeaders = headers.newBuilder()
             .add("X-Sort-Param", sortParam)
             .add("X-Is-Tag-Search", if (!isStandardGenre && actualGenre.isNotEmpty() && dayParam.isEmpty()) "true" else "false")
@@ -110,7 +108,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
             val sortParam = response.request.header("X-Sort-Param")
             val isTagSearch = response.request.header("X-Is-Tag-Search") == "true"
             
-            // [특수 로직] 태그 검색 시, 전체 페이지를 백그라운드로 로드하여 타치요미가 별점순/조회순 정렬
             if (isTagSearch && sortParam != null && sortParam != "USER") {
                 val allMangas = mutableListOf<Manga>()
                 allMangas.addAll(mangas)
@@ -118,7 +115,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
                 var currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
                 var next = hasNextPage
                 
-                // 앱 뻗음 방지를 위해 최대 50페이지 제한
                 while (next && currentPage < 50) {
                     currentPage++
                     val nextUrl = response.request.url.newBuilder().setQueryParameter("page", currentPage.toString()).build()
@@ -135,7 +131,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
                     }
                 }
                 
-                // [해결] 별점순 뿐만 아니라 조회순(VIEW)도 앱 내부에서 완벽하게 줄세우기
                 val sortedMangas = when (sortParam) {
                     "STAR_SCORE", "STAR" -> allMangas.sortedByDescending { it.starScore }
                     "VIEW" -> allMangas.sortedByDescending { it.viewCount }
@@ -550,6 +545,9 @@ class ChallengeGenreFilter : Filter.Select<String>("장르", challengeGenreList.
 // ==========================================
 class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
     override val name = "Naver Webtoon Best Challenge"
+    
+    // [추가] JSON 파서 선언
+    private val json = Json { ignoreUnknownKeys = true }
 
     override fun popularMangaRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=VIEW&page=$page", headers)
     override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=UPDATE&page=$page", headers)
@@ -569,7 +567,6 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
         val sortParam = sortFilter?.let { challengeSortList[it.state].value } ?: "VIEW"
         val genreParam = genreFilter?.let { challengeGenreList[it.state].value } ?: ""
         
-        // [해결] 서버의 500 에러를 피하기 위해 무조건 VIEW 로 속여서 호출합니다.
         val apiOrder = if (sortParam == "STAR" || sortParam == "VIEW") "VIEW" else sortParam
 
         val url = "$baseUrl/api/$mType/list".toHttpUrl().newBuilder().apply {
@@ -580,7 +577,6 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
             }
         }.build()
         
-        // 타치요미 내부 로컬 정렬을 위해 헤더에 실제 사용자가 선택한 정렬값 숨기기
         val reqHeaders = headers.newBuilder()
             .add("X-Sort-Param", sortParam)
             .build()
@@ -599,7 +595,6 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
         
         val sortParam = response.request.header("X-Sort-Param")
         
-        // [특수 로직] 별점순(STAR)일 경우 500 에러 우회를 위해 타치요미 앱 내부에서 백그라운드로 긁어와 직접 정렬
         if (sortParam == "STAR") {
             val allMangas = mutableListOf<MangaChallenge>()
             allMangas.addAll(result.list)
@@ -607,7 +602,6 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
             var currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
             var next = result.pageInfo?.nextPage != null && result.pageInfo.nextPage != 0
             
-            // 앱 뻗음 방지를 위해 최대 50페이지(약 1,500개)까지만 로드하여 정렬
             while (next && currentPage < 50) {
                 currentPage++
                 val nextUrl = response.request.url.newBuilder().setQueryParameter("page", currentPage.toString()).build()
@@ -620,7 +614,6 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
                 next = nextResult.pageInfo?.nextPage != null && nextResult.pageInfo.nextPage != 0
             }
             
-            // [해결] 베도/도전만화 앱 내부 별점순 완벽 줄세우기
             val sortedMangas = allMangas.sortedByDescending { it.starScore }
             return MangasPage(sortedMangas.map { it.toSManga(mType) }.distinctBy { it.url }, false)
         }
@@ -641,6 +634,9 @@ class NaverBestChallenge : NaverComicChallengeBase("bestChallenge") {
 class NaverChallenge : NaverComicChallengeBase("challenge") {
     override val name = "Naver Webtoon Challenge"
     override val dateFormat = SimpleDateFormat("yyyy.MM.dd", Locale.KOREA)
+    
+    // [추가] JSON 파서 선언
+    private val json = Json { ignoreUnknownKeys = true }
 
     override fun popularMangaRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=VIEW&page=$page", headers)
     override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/api/$mType/list?order=UPDATE&page=$page", headers)

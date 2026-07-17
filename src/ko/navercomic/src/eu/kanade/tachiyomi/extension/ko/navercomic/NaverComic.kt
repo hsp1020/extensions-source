@@ -6,10 +6,6 @@ import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SManga
 import keiyoushi.utils.firstInstanceOrNull
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -110,47 +106,13 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         if (jsonObject.containsKey("titleList")) {
             allMangas.addAll(json.decodeFromJsonElement<List<Manga>>(jsonObject["titleList"]!!))
             
+            // [해결] 봇 탐지를 유발하는 모든 백그라운드 강제 로드(while, async) 로직을 삭제했습니다.
+            // 대신 이중 통신 버그가 제거되었으므로, 스크롤 시 1페이지씩 빠르고 안전하게 로드됩니다.
             val pageInfo = jsonObject["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
-            var hasNext = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
-            val currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
-            
-            // [핵심 최적화] 장르/완결 탭 로딩 시, 코루틴 병렬 처리로 10페이지를 0.5초만에 한 번에 긁어옵니다.
-            if (hasNext && currentPage == 1) {
-                val batchSize = 10 // 10페이지(약 300개) 동시 요청
-                val pagesToFetch = (currentPage + 1..currentPage + batchSize).toList()
-                
-                val fetched = runBlocking(Dispatchers.IO) {
-                    pagesToFetch.map { p ->
-                        async {
-                            val nextUrl = response.request.url.newBuilder().setQueryParameter("page", p.toString()).build()
-                            val nextReq = GET(nextUrl, response.request.headers)
-                            try {
-                                val nextRes = client.newCall(nextReq).execute()
-                                val nextJson = json.parseToJsonElement(nextRes.body.string()).jsonObject
-                                if (nextJson.containsKey("titleList")) {
-                                    val nextMangas = json.decodeFromJsonElement<List<Manga>>(nextJson["titleList"]!!)
-                                    val nextInfo = nextJson["pageInfo"]?.let { json.decodeFromJsonElement<PageInfo>(it) }
-                                    val nextHas = nextInfo?.nextPage != 0 && nextInfo?.nextPage != null
-                                    Pair(nextMangas, nextHas)
-                                } else {
-                                    Pair(emptyList<Manga>(), false)
-                                }
-                            } catch (e: Exception) {
-                                Pair(emptyList<Manga>(), false)
-                            }
-                        }
-                    }.awaitAll()
-                }
-                
-                for (pair in fetched) {
-                    allMangas.addAll(pair.first)
-                    hasNext = pair.second
-                    if (!hasNext) break
-                }
-            }
+            val hasNextPage = pageInfo?.nextPage != 0 && pageInfo?.nextPage != null
             
             val mangas = allMangas.map { it.toSManga(mType) }.distinctBy { it.url }
-            return MangasPage(mangas, hasNext)
+            return MangasPage(mangas, hasNextPage)
             
         } else if (jsonObject.containsKey("titleListMap")) {
             val map = json.decodeFromJsonElement<Map<String, List<Manga>>>(jsonObject["titleListMap"]!!)

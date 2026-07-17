@@ -42,7 +42,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
     override fun latestUpdatesParse(response: Response): MangasPage = parseWebtoonList(response)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // 1. 키워드 검색일 경우
         if (query.isNotEmpty()) {
             val url = "$baseUrl/api/search/$mType".toHttpUrl().newBuilder()
                 .addQueryParameter("keyword", query)
@@ -51,7 +50,6 @@ class NaverWebtoon : NaverComicBase("webtoon") {
             return GET(url, headers)
         }
 
-        // 2. 필터 검색일 경우
         val sortFilter = filters.firstInstanceOrNull<SortFilter>()
         val genreFilter = filters.firstInstanceOrNull<GenreFilter>()
         val dayFilter = filters.firstInstanceOrNull<DayFilter>()
@@ -60,20 +58,28 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val genreParam = genreFilter?.let { genreList[it.state].value } ?: ""
         val dayParam = dayFilter?.let { dayList[it.state].value } ?: ""
 
+        // PERIOD(연도별), BRAND(브랜드) 포함
+        val isStandardGenre = listOf("DAILY", "COMIC", "FANTASY", "ACTION", "DRAMA", "PURE", "SENSIBILITY", "THRILL", "HISTORICAL", "SPORTS", "PERIOD", "BRAND").contains(genreParam)
+
         val url = baseUrl.toHttpUrl().newBuilder().apply {
             if (dayParam == "finished") {
                 addPathSegments("api/webtoon/titlelist/finished")
                 addQueryParameter("order", sortParam)
                 addQueryParameter("page", page.toString())
             } else if (genreParam.isNotEmpty() && dayParam.isEmpty()) {
-                // [핵심 해결] 대분류 장르(영어)와 세부 태그(한글) 모두 이 장르 API에서 완벽하게 처리됩니다.
-                addPathSegments("api/webtoon/titlelist/genre")
-                addQueryParameter("genre", genreParam) // OkHttp가 "드라마&영화 원작웹툰"의 '&'를 알아서 '%26'으로 인코딩해줍니다.
-                
-                // 장르 탭 전용 별점순 파라미터 예외 처리
-                val finalSortParam = if (sortParam == "STAR_SCORE") "STAR" else sortParam
-                addQueryParameter("order", finalSortParam)
-                addQueryParameter("page", page.toString())
+                if (isStandardGenre) {
+                    addPathSegments("api/webtoon/titlelist/genre")
+                    addQueryParameter("genre", genreParam)
+                    val finalSortParam = if (sortParam == "STAR_SCORE") "STAR" else sortParam
+                    addQueryParameter("order", finalSortParam)
+                    addQueryParameter("page", page.toString())
+                } else {
+                    // [임시 복구] 500 에러를 막기 위해 한글 태그는 다시 검색 API로 우회합니다.
+                    // 정렬 기능 완벽 구현을 위해 웹페이지 소스코드를 주시면 진짜 태그 API를 찾아 적용하겠습니다.
+                    addPathSegments("api/search/webtoon")
+                    addQueryParameter("keyword", genreParam)
+                    addQueryParameter("page", page.toString())
+                }
             } else {
                 addPathSegments("api/webtoon/titlelist/weekday")
                 if (dayParam.isNotEmpty()) {
@@ -91,13 +97,12 @@ class NaverWebtoon : NaverComicBase("webtoon") {
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
 
-        // 키워드 검색 응답 처리
+        // 검색 API 응답 처리
         if (jsonObject.containsKey("searchList")) {
             val result = json.decodeFromJsonElement<ApiMangaSearchResponse>(jsonObject)
             return MangasPage(result.toSMangas(mType), result.hasNextPage)
         }
 
-        // 필터 API 응답 처리
         return parseWebtoonListJson(response, jsonObject)
     }
 
@@ -177,17 +182,13 @@ internal val genreList = listOf(
     FilterOption("드라마", "DRAMA"),
     FilterOption("감성", "SENSIBILITY"),
     FilterOption("스포츠", "SPORTS"),
-    
-    // [해결] 연도별웹툰/브랜드웹툰 대분류 영어 코드로 매핑
-    FilterOption("연도별웹툰", "PERIOD"),
-    FilterOption("브랜드웹툰", "BRAND"),
-    
-    // [해결] 대분류 드라마(DRAMA)와 구분하기 위해 세부 태그는 (태그) 명시
-    FilterOption("드라마 (태그)", "드라마"),
-    
+    FilterOption("연도별웹툰", "PERIOD"), // [지시사항 반영] 대분류 코드로 매핑
+    FilterOption("브랜드웹툰", "BRAND"),   // [지시사항 반영] 대분류 코드로 매핑
+    FilterOption("드라마 (태그)", "드라마"), // [지시사항 반영] 명칭 구분
     FilterOption("드라마&영화 원작웹툰", "드라마&영화 원작웹툰"),
     FilterOption("먼치킨", "먼치킨"),
     FilterOption("학원로맨스", "학원로맨스"),
+    FilterOption("학원액션", "학원액션"),
     FilterOption("로판", "로판"),
     FilterOption("게임판타지", "게임판타지"),
     FilterOption("타임슬립", "타임슬립"),
@@ -475,7 +476,7 @@ class DayFilter : Filter.Select<String>("요일 / 완결", dayList.map { it.name
 internal val challengeSortList = listOf(
     FilterOption("조회순", "VIEW"),
     FilterOption("업데이트순", "UPDATE"),
-    FilterOption("별점순", "starScore"),
+    FilterOption("별점순", "starScore"), 
 )
 
 internal val challengeGenreList = listOf(

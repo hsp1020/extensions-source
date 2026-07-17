@@ -53,7 +53,7 @@ abstract class NaverComicBase(protected val mType: String) : HttpSource() {
         return GET("$baseUrl/api/article/list/info?titleId=$titleId", headers)
     }
 
-    // [핵심 해결] 지구본(웹뷰) 버튼 클릭 시 JSON API가 아닌 실제 웹페이지로 연결되도록 URL 강제 지정
+    // 지구본(웹뷰) 버튼 클릭 시 JSON API가 아닌 실제 웹페이지로 연결되도록 URL 강제 지정
     override fun getMangaUrl(manga: SManga): String {
         return baseUrl + manga.url
     }
@@ -64,7 +64,8 @@ abstract class NaverComicBase(protected val mType: String) : HttpSource() {
 
     private fun chapterListRequest(mangaUrl: String, page: Int): Request {
         val titleId = (baseUrl + mangaUrl).toHttpUrl().queryParameter("titleId")
-        return GET("$baseUrl/api/article/list?titleId=$titleId&page=$page", headers)
+        // [핵심 해결] 완결 웹툰이 1화부터 나오는 현상을 막기 위해 무조건 최신화부터(DESC) 주도록 강제합니다.
+        return GET("$baseUrl/api/article/list?titleId=$titleId&page=$page&sort=DESC", headers)
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
